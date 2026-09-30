@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.2"
+local VERSION = "0.4.3"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -25,8 +25,11 @@ local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 -- one felt in combat; home latency and the labelled values are in the tooltip.
 local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
 local NUMBER_SIZE = 16
--- The game's heavier number style (NumberFont_OutlineThick): there is no bold number font.
-local NUMBER_OUTLINE = "THICKOUTLINE"
+-- There is no bold number font, so numbers are drawn twice: the outlined number, and on top of
+-- it the same number without outline one pixel to the right. Strokes get a pixel thicker and
+-- the black outline stays on the outside.
+local NUMBER_OUTLINE = "OUTLINE"
+local BOLD_OFFSET = 1
 -- The rows mirror each other above and below the line.
 local ROW_OFFSET = 9.5
 -- Widest a number may be (the slot less a 5 px margin each side); wider ones shrink to fit.
@@ -35,32 +38,47 @@ local DIVIDER_COLOR = { 0.86, 0.74, 0.46 }
 local DIVIDER_HALF_WIDTH = 16
 local DIVIDER_ALPHA = 1
 
-local function SetLatencyColor(text, latency)
+local function SetNumberColor(number, r, g, b)
+	number.base:SetTextColor(r, g, b)
+	number.bold:SetTextColor(r, g, b)
+end
+
+local function SetLatencyColor(number, latency)
 	if latency > MEDIUM_LATENCY then
-		text:SetTextColor(1, 0, 0)
+		SetNumberColor(number, 1, 0, 0)
 	elseif latency > LOW_LATENCY then
-		text:SetTextColor(1, 1, 0)
+		SetNumberColor(number, 1, 1, 0)
 	else
-		text:SetTextColor(0, 1, 0)
+		SetNumberColor(number, 0, 1, 0)
 	end
 end
 
 -- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
 -- 46 px frame is anchored at the top left of the 45 px slot, so its opening is centred half a
 -- pixel right of and below the slot's own centre.
+-- The pair is centred as one: the outlined copy half the offset left, the bold copy half right.
 local function CreateNumber(parent, centre, y)
-	local text = parent:CreateFontString(nil, "OVERLAY")
-	text:SetFont(NUMBER_FONT, NUMBER_SIZE, NUMBER_OUTLINE)
-	text:SetPoint("CENTER", centre, "CENTER", 0, y)
-	return text
+	local number = {}
+	number.base = parent:CreateFontString(nil, "OVERLAY")
+	number.base:SetPoint("CENTER", centre, "CENTER", -BOLD_OFFSET / 2, y)
+	number.bold = parent:CreateFontString(nil, "OVERLAY")
+	number.bold:SetDrawLayer("OVERLAY", 1)
+	number.bold:SetPoint("CENTER", centre, "CENTER", BOLD_OFFSET / 2, y)
+	return number
 end
 
-local function SetNumber(text, value)
-	text:SetFont(NUMBER_FONT, NUMBER_SIZE, NUMBER_OUTLINE)
-	text:SetText(value)
-	local width = text:GetStringWidth()
+local function SetNumberSize(number, size)
+	number.base:SetFont(NUMBER_FONT, size, NUMBER_OUTLINE)
+	number.bold:SetFont(NUMBER_FONT, size, "")
+end
+
+local function SetNumber(number, value)
+	SetNumberSize(number, NUMBER_SIZE)
+	number.base:SetText(value)
+	number.bold:SetText(value)
+	local width = number.base:GetStringWidth() + BOLD_OFFSET
 	if width > ROW_WIDTH then
-		text:SetFont(NUMBER_FONT, NUMBER_SIZE * ROW_WIDTH / width, NUMBER_OUTLINE)
+		SetNumberSize(number, NUMBER_SIZE * ROW_WIDTH / width)
 	end
 end
 
@@ -98,7 +116,7 @@ dividerRight:SetPoint("LEFT", slotFrame, "CENTER")
 dividerRight:SetGradient("HORIZONTAL", dividerColor, dividerClear)
 
 local fpsText = CreateNumber(block, slotFrame, ROW_OFFSET)
-fpsText:SetTextColor(1, 1, 1)
+SetNumberColor(fpsText, 1, 1, 1)
 
 local worldText = CreateNumber(block, slotFrame, -ROW_OFFSET)
 
