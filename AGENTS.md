@@ -30,7 +30,7 @@ The addon makes room for itself, and removing it leaves no trace. Edit Mode lays
 - While Edit Mode is open the moves are off and the block is hidden, so Edit Mode only sees and saves the layout's own positions. On leaving Edit Mode the art is measured again.
 - When either frame is protected in combat, the move waits for `PLAYER_REGEN_ENABLED`.
 - If the bags bar is placed on its own (not attached by its left side), nothing moves and the block stands just left of it.
-- The XP bar and the top action row cannot grow with the row (the XP bar's width is an Edit Mode size setting; the row is 12 fixed buttons), so they stay centered, slightly shorter than the bottom row at both ends.
+- In the Camelot layout the bars above the row (XP bars, the top action row) stack on the main action bar by their left edge (`ACTION_BARS_RELATIVE_TO_BASE_POSITIONING`), so they move with the row and line up with its left end. The XP bar containers (`MainStatusTrackingBarContainer`, `SecondaryStatusTrackingBarContainer`) stretch by the row's growth to reach its right end, using Blizzard's own `ResizeContainerBars` and `UpdateDividers`, as its Size setting does; a `hooksecurefunc` on their `SetSize`/`SetWidth` keeps the stretch when Blizzard resizes them. The top action row is fixed buttons and cannot stretch.
 
 ## Never
 

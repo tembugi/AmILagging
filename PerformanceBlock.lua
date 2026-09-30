@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.3"
+local VERSION = "0.5.4"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -278,12 +278,54 @@ local function RowRoots()
 	return roots
 end
 
+-- The XP bars stack on the action bar by their left edge (the Camelot layout anchors the bars
+-- above the row to the main action bar), so they line up with the row's left end and stop
+-- short of the block. They stretch by the row's growth to reach its right end again, and
+-- Blizzard's own methods, the ones its Size setting uses, fit the bars and tick marks inside.
+local xpBars = {} -- container -> { base = Blizzard's width, extra = added width, setting }
+
+local function FitXPBar(container, state)
+	state.setting = true
+	container:SetWidth(state.base + state.extra)
+	container:ResizeContainerBars()
+	container:UpdateDividers(container:GetExpectedSegments())
+	state.setting = false
+end
+
+local function StretchXPBars(rowGrowth)
+	for _, container in ipairs({ MainStatusTrackingBarContainer, SecondaryStatusTrackingBarContainer }) do
+		if container and container.ResizeContainerBars and container.UpdateDividers then
+			local state = xpBars[container]
+			if not state then
+				state = { base = container:GetWidth(), extra = 0 }
+				xpBars[container] = state
+				local function OnResizedByBlizzard(_, width)
+					if not state.setting then
+						state.base = width
+						FitXPBar(container, state)
+					end
+				end
+				hooksecurefunc(container, "SetSize", OnResizedByBlizzard)
+				hooksecurefunc(container, "SetWidth", OnResizedByBlizzard)
+			end
+			-- The growth is in UIParent units; the container may sit in a scaled parent.
+			state.extra = rowGrowth * UIParent:GetEffectiveScale() / container:GetEffectiveScale()
+			FitXPBar(container, state)
+		end
+	end
+end
+
 local function AnyProtected()
 	if BagsBar:IsProtected() then
 		return true
 	end
 	for frame in pairs(rowMovers) do
 		if frame:IsProtected() then
+			return true
+		end
+	end
+	for container in pairs(xpBars) do
+		if container:IsProtected() then
 			return true
 		end
 	end
@@ -310,6 +352,7 @@ local function Layout()
 	if editModeOpen then
 		bags:SetExtraX(0)
 		ResetRow()
+		StretchXPBars(0)
 		block:Hide()
 		return
 	end
@@ -342,10 +385,12 @@ local function Layout()
 		for frame, mover in pairs(rowMovers) do
 			mover:SetExtraX(roots[frame] and -rowGrowth / 2 / frame:GetScale() or 0)
 		end
+		StretchXPBars(relativeTo == MicroMenuContainer and rowGrowth or 0)
 	else
 		-- Bags placed on their own: stand just left of them, joined the same way, and move nothing.
 		bags:SetExtraX(0)
 		ResetRow()
+		StretchXPBars(0)
 		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(art.groupReach.right + art.groupReach.left), 0)
 	end
 	block:Show()
