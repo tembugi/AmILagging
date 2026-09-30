@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Performance Block
 ## Notes: FPS and home and world latency in a small block on the bar, next to the game menu.
-## Version: 0.6.1
+## Version: 0.6.2
 ## Author: tembugi
 ## IconAtlas: UI-HUD-MicroMenu-GameMenu-Mouseover
 ## AllowLoadGameType: camelot

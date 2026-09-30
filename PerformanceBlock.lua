@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.6.1"
+local VERSION = "0.6.2"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -30,12 +30,21 @@ local art = {
 -- (Skurri for Latin alphabets, whatever Blizzard sets for other languages), just smaller.
 -- The standard game font stands in if that font is missing.
 local NUMBER_FONT_OBJECT = "NumberFont_Outline_Huge"
-local NUMBER_SIZE = 16
+local NUMBER_SIZE = 15
 local NUMBER_OUTLINE = "OUTLINE"
--- How far each number's text box keeps from the line: FPS above it, latency below it. The
--- box spans the font's full height, so no digit touches the line, even in a font whose
--- figures rise and drop like this one's (6 and 8 rise, 3, 4, 5, 7 and 9 drop).
-local LINE_CLEARANCE = 3
+-- This font's figures are old style: 0, 1 and 2 stand at x-height, 6 and 8 rise above it,
+-- 3, 4, 5, 7 and 9 drop below the baseline. Measured from Skurri in game, as parts of the
+-- font size: how far figures rise above and drop below the baseline, and where the baseline
+-- sits in the text box. Each number is placed so the band from its highest to its lowest
+-- possible figure sits in the middle of its half of the slot, as far from the line as from
+-- the border, whatever digits it shows. (The fallback font's figures sit a little off.)
+local FIGURE_RISE = 0.67
+local FIGURE_DROP = 0.19
+local BOX_ASCENT = 0.74
+local BOX_DESCENT = 0.26
+-- The gray inner edge of the slot art, inside the slot's own size.
+local SLOT_EDGE = 3.5
+local LINE_THICKNESS = 1
 -- Room kept free on each side of a number; wider numbers (four-digit latency) shrink to fit.
 local NUMBER_MARGIN = 6.5
 local DIVIDER_COLOR = { 0.86, 0.74, 0.46 }
@@ -57,15 +66,23 @@ end
 
 -- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
 -- frame art is anchored at the top left of the slot and is a pixel larger, so its opening is
--- centred half a pixel right of and below the slot's own centre. The rows mirror each other:
--- one number's box stands on the line, the other hangs from it.
+-- centred half a pixel right of and below the slot's own centre. The rows mirror each other.
+local function PlaceNumber(text, size)
+	local half = art.slotSize / 2 - SLOT_EDGE - LINE_THICKNESS / 2
+	local gap = (half - (FIGURE_RISE + FIGURE_DROP) * size) / 2
+	local fromCentre = LINE_THICKNESS / 2 + gap
+	text:ClearAllPoints()
+	if text.aboveLine then
+		text:SetPoint("BOTTOM", text.centre, "CENTER", 0, fromCentre + (FIGURE_DROP - BOX_DESCENT) * size)
+	else
+		text:SetPoint("TOP", text.centre, "CENTER", 0, -fromCentre - (FIGURE_RISE - BOX_ASCENT) * size)
+	end
+end
+
 local function CreateNumber(parent, centre, aboveLine)
 	local text = parent:CreateFontString(nil, "OVERLAY")
-	if aboveLine then
-		text:SetPoint("BOTTOM", centre, "CENTER", 0, LINE_CLEARANCE)
-	else
-		text:SetPoint("TOP", centre, "CENTER", 0, -LINE_CLEARANCE)
-	end
+	text.centre = centre
+	text.aboveLine = aboveLine
 	return text
 end
 
@@ -81,8 +98,14 @@ local function SetNumber(text, value)
 	text:SetText(value)
 	local maxWidth = art.slotSize - 2 * NUMBER_MARGIN
 	local width = text:GetStringWidth()
+	local size = NUMBER_SIZE
 	if width > maxWidth then
-		SetNumberSize(text, NUMBER_SIZE * maxWidth / width)
+		size = NUMBER_SIZE * maxWidth / width
+		SetNumberSize(text, size)
+	end
+	if size ~= text.placedSize then
+		text.placedSize = size
+		PlaceNumber(text, size)
 	end
 end
 
@@ -172,6 +195,8 @@ end
 
 local function DressBlock()
 	block:SetSize(art.slotSize, art.slotSize)
+	fpsText.placedSize = nil
+	worldText.placedSize = nil
 	groupFrame:SetAtlas(art.groupFrame)
 	groupFrame:ClearAllPoints()
 	groupFrame:SetPoint("TOPLEFT", block, "TOPLEFT", -art.groupReach.left, art.groupReach.top)
