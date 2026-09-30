@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.5"
+local VERSION = "0.5.6"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -215,7 +215,7 @@ local layoutPending = false
 -- the plain originals it keeps (SetPointBase, ClearAllPointsBase), so they change the position
 -- and nothing else.
 local function CreateMover(frame)
-	local mover = { frame = frame, moving = false }
+	local mover = { frame = frame, moving = false, applied = 0 }
 	local setPoint = frame.SetPointBase or frame.SetPoint
 	local clearAllPoints = frame.ClearAllPointsBase or frame.ClearAllPoints
 
@@ -224,12 +224,17 @@ local function CreateMover(frame)
 		if point then
 			self.anchor = { point, relativeTo or frame:GetParent(), relativePoint, x, y }
 		end
+		-- Blizzard just placed the frame, so it stands where Blizzard wants it.
+		self.applied = 0
 	end
 
+	-- Only touches the frame when its offset has to change, so frames that stay where Blizzard
+	-- put them (protected action bars among them) are left alone.
 	function mover:SetExtraX(extraX)
-		if not self.anchor then
+		if not self.anchor or extraX == self.applied then
 			return
 		end
+		self.applied = extraX
 		self.moving = true
 		clearAllPoints(frame)
 		setPoint(frame, self.anchor[1], self.anchor[2], self.anchor[3], self.anchor[4] + extraX, self.anchor[5])
@@ -319,6 +324,18 @@ end
 -- left edge). They are fixed buttons and cannot stretch like the XP bars, so they move right by
 -- half the row's growth to stay centred over it.
 local STACKED_BAR_NAMES = { "MultiBarBottomLeft", "MultiBarBottomRight", "StanceBar", "PetActionBar", "PossessActionBar" }
+
+-- Watch every bar that can stack above the row from the start: Edit Mode first parks them at
+-- the screen's top left and moves them onto the action bar a moment later, so their anchor at
+-- one moment says little.
+local function WatchStackedBars()
+	for _, name in ipairs(STACKED_BAR_NAMES) do
+		local bar = _G[name]
+		if bar and bar.GetPoint then
+			RowMoverFor(bar)
+		end
+	end
+end
 
 local function StackedBars()
 	local bars = {}
@@ -481,6 +498,7 @@ events:SetScript("OnEvent", function(_, event)
 	MeasureArt()
 	DressBlock()
 	bags:Remember()
+	WatchStackedBars()
 	Layout()
 	Update()
 	C_Timer.NewTicker(UPDATE_INTERVAL, Update)
