@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.0"
+local VERSION = "0.4.1"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -24,14 +24,16 @@ local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 -- centred, with a faint gold line between them at the slot's centre. World latency is the
 -- one felt in combat; home latency and the labelled values are in the tooltip.
 local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
-local NUMBER_SIZE = 18
+local NUMBER_SIZE = 16
+-- The game's heavier number style (NumberFont_OutlineThick): there is no bold number font.
+local NUMBER_OUTLINE = "THICKOUTLINE"
 -- The rows mirror each other above and below the line.
 local ROW_OFFSET = 9.5
 -- Widest a number may be (the slot less a 5 px margin each side); wider ones shrink to fit.
 local ROW_WIDTH = 32
-local DIVIDER_COLOR = { 0.72, 0.64, 0.42 }
-local DIVIDER_HALF_WIDTH = 14
-local DIVIDER_ALPHA = 0.75
+local DIVIDER_COLOR = { 0.86, 0.74, 0.46 }
+local DIVIDER_HALF_WIDTH = 16
+local DIVIDER_ALPHA = 1
 
 local function SetLatencyColor(text, latency)
 	if latency > MEDIUM_LATENCY then
@@ -45,17 +47,17 @@ end
 
 local function CreateNumber(parent, y)
 	local text = parent:CreateFontString(nil, "OVERLAY")
-	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
+	text:SetFont(NUMBER_FONT, NUMBER_SIZE, NUMBER_OUTLINE)
 	text:SetPoint("CENTER", parent, "CENTER", 0, y)
 	return text
 end
 
 local function SetNumber(text, value)
-	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
+	text:SetFont(NUMBER_FONT, NUMBER_SIZE, NUMBER_OUTLINE)
 	text:SetText(value)
 	local width = text:GetStringWidth()
 	if width > ROW_WIDTH then
-		text:SetFont(NUMBER_FONT, NUMBER_SIZE * ROW_WIDTH / width, "OUTLINE")
+		text:SetFont(NUMBER_FONT, NUMBER_SIZE * ROW_WIDTH / width, NUMBER_OUTLINE)
 	end
 end
 
