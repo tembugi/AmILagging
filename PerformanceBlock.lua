@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.2"
+local VERSION = "0.5.3"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -195,11 +195,13 @@ local function DressBlock()
 	slotFrame:SetSize(art.slotFrameSize, art.slotFrameSize)
 end
 
--- Making room on the bar. Edit Mode lays out the bottom row from the micro menu: the action
--- bar hangs off its left, the bags bar off its right, and the gryphons off those. While the
--- addon runs, the block takes the bags bar's place, joined to the micro menu exactly as the
--- bags were; the bags move right to join the block the same way; and the micro menu moves
--- left by half that, so the row grows evenly on both sides and stays centred.
+-- Making room on the bar. While the addon runs, the block takes the bags bar's place, joined to
+-- the micro menu exactly as the bags were, and the bags move right to join the block the same
+-- way. Then the whole row moves left by half that, so it grows evenly on both sides and stays
+-- centred. What "the whole row" hangs off depends on the layout: in a saved layout the action
+-- bar hangs off the micro menu, but Edit Mode places bars in their default position on the
+-- screen itself. So the addon follows the anchors of the action bar and of the micro menu up
+-- to the frames that hang off the screen, and moves each of those once.
 -- Nothing is saved: the layout is never written, Edit Mode anchors these frames again on
 -- every layout change, and the moves are taken off while Edit Mode is open so it only ever
 -- sees and saves the layout's own positions. Without the addon the bar is exactly as the
@@ -237,14 +239,69 @@ local function CreateMover(frame)
 	return mover
 end
 
-local bags, microMenu
+local bags
+local rowMovers = {} -- frame -> mover, for the row's roots moved so far
+local OnMovedByBlizzard
+
+-- The frame at the top of a frame's anchor chain: the one that hangs off the screen itself.
+local function RootOf(frame)
+	local current = frame
+	for _ = 1, 10 do
+		local _, relativeTo = current:GetPoint(1)
+		if not relativeTo or relativeTo == UIParent or not relativeTo.GetPoint then
+			return current
+		end
+		current = relativeTo
+	end
+	return current
+end
+
+local function RowMoverFor(frame)
+	local mover = rowMovers[frame]
+	if not mover then
+		mover = CreateMover(frame)
+		mover:Remember()
+		rowMovers[frame] = mover
+		hooksecurefunc(frame, "SetPoint", function() OnMovedByBlizzard(mover) end)
+	end
+	return mover
+end
+
+-- The row's roots: where the action bar's chain and the micro menu's chain start.
+local function RowRoots()
+	local roots = {}
+	for _, frame in ipairs({ MainActionBar, MicroMenuContainer }) do
+		if frame then
+			roots[RootOf(frame)] = true
+		end
+	end
+	return roots
+end
+
+local function AnyProtected()
+	if BagsBar:IsProtected() then
+		return true
+	end
+	for frame in pairs(rowMovers) do
+		if frame:IsProtected() then
+			return true
+		end
+	end
+	return false
+end
+
+local function ResetRow()
+	for _, mover in pairs(rowMovers) do
+		mover:SetExtraX(0)
+	end
+end
 
 local function Layout()
 	if not bags.anchor then
 		return
 	end
 	-- These frames can be protected in combat; finish when combat ends.
-	if InCombatLockdown() and (BagsBar:IsProtected() or MicroMenuContainer:IsProtected()) then
+	if InCombatLockdown() and AnyProtected() then
 		layoutPending = true
 		return
 	end
@@ -252,7 +309,7 @@ local function Layout()
 
 	if editModeOpen then
 		bags:SetExtraX(0)
-		microMenu:SetExtraX(0)
+		ResetRow()
 		block:Hide()
 		return
 	end
@@ -276,22 +333,25 @@ local function Layout()
 		local rowGrowth = art.slotSize * bagsScale + joinAfterBlock
 		bags:SetExtraX(rowGrowth / bagsScale)
 
-		-- Grow evenly: the whole row moves left by half, when the bags hang off the micro menu.
-		if relativeTo == MicroMenuContainer then
-			microMenu:SetExtraX(-rowGrowth / 2 / MicroMenuContainer:GetScale())
-		else
-			microMenu:SetExtraX(0)
+		-- Grow evenly: when the bags hang off the micro menu, each root of the row moves left by
+		-- half, once. Roots no longer in the row go back to where Edit Mode put them.
+		local roots = relativeTo == MicroMenuContainer and RowRoots() or {}
+		for frame in pairs(roots) do
+			RowMoverFor(frame)
+		end
+		for frame, mover in pairs(rowMovers) do
+			mover:SetExtraX(roots[frame] and -rowGrowth / 2 / frame:GetScale() or 0)
 		end
 	else
 		-- Bags placed on their own: stand just left of them, joined the same way, and move nothing.
 		bags:SetExtraX(0)
-		microMenu:SetExtraX(0)
+		ResetRow()
 		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(art.groupReach.right + art.groupReach.left), 0)
 	end
 	block:Show()
 end
 
-local function OnMovedByBlizzard(mover)
+function OnMovedByBlizzard(mover)
 	if mover.moving then
 		return
 	end
@@ -340,9 +400,7 @@ events:SetScript("OnEvent", function(_, event)
 		return
 	end
 	bags = CreateMover(BagsBar)
-	microMenu = CreateMover(MicroMenuContainer)
 	hooksecurefunc(BagsBar, "SetPoint", function() OnMovedByBlizzard(bags) end)
-	hooksecurefunc(MicroMenuContainer, "SetPoint", function() OnMovedByBlizzard(microMenu) end)
 	EventRegistry:RegisterCallback("EditMode.Enter", OnEditModeEnter, block)
 	EventRegistry:RegisterCallback("EditMode.Exit", OnEditModeExit, block)
 	editModeOpen = EditModeManagerFrame and EditModeManagerFrame:IsEditModeActive() or false
@@ -350,7 +408,6 @@ events:SetScript("OnEvent", function(_, event)
 	MeasureArt()
 	DressBlock()
 	bags:Remember()
-	microMenu:Remember()
 	Layout()
 	Update()
 	C_Timer.NewTicker(UPDATE_INTERVAL, Update)
