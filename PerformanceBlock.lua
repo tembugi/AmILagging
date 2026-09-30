@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.3.0"
+local VERSION = "0.4.0"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -20,19 +20,18 @@ local BAR_FRAME_LEFT, BAR_FRAME_TOP, BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM = -6, 6, 
 local SEGMENT_GAP = 7
 local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 
--- The face: FPS and world latency side by side, each with a small label under it. World
--- latency is the one felt in combat; home latency is in the tooltip.
+-- The face: numbers only. FPS on top in white, world latency below in its color, both
+-- centred, with a faint gold line between them at the slot's centre. World latency is the
+-- one felt in combat; home latency and the labelled values are in the tooltip.
 local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
-local NUMBER_SIZE = 14
-local LABEL_SIZE = 8
-local LABEL_COLOR = { 0.72, 0.64, 0.42 }
-local COLUMN_OFFSET = 10.5 -- column centres, left and right of the slot's centre
-local NUMBER_Y = -19 -- centres, down from the slot's top
-local LABEL_Y = -33
--- Widest a number may be; wider ones (four-digit latency) shrink to fit their column.
-local COLUMN_WIDTH = 20
-local DIVIDER_HALF_HEIGHT = 14
-local DIVIDER_ALPHA = 0.7
+local NUMBER_SIZE = 18
+-- The rows mirror each other above and below the line.
+local ROW_OFFSET = 9.5
+-- Widest a number may be (the slot less a 5 px margin each side); wider ones shrink to fit.
+local ROW_WIDTH = 32
+local DIVIDER_COLOR = { 0.72, 0.64, 0.42 }
+local DIVIDER_HALF_WIDTH = 14
+local DIVIDER_ALPHA = 0.75
 
 local function SetLatencyColor(text, latency)
 	if latency > MEDIUM_LATENCY then
@@ -44,10 +43,10 @@ local function SetLatencyColor(text, latency)
 	end
 end
 
-local function CreateNumber(parent, x)
+local function CreateNumber(parent, y)
 	local text = parent:CreateFontString(nil, "OVERLAY")
 	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
-	text:SetPoint("CENTER", parent, "TOP", x, NUMBER_Y)
+	text:SetPoint("CENTER", parent, "CENTER", 0, y)
 	return text
 end
 
@@ -55,20 +54,9 @@ local function SetNumber(text, value)
 	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
 	text:SetText(value)
 	local width = text:GetStringWidth()
-	if width > COLUMN_WIDTH then
-		text:SetFont(NUMBER_FONT, NUMBER_SIZE * COLUMN_WIDTH / width, "OUTLINE")
+	if width > ROW_WIDTH then
+		text:SetFont(NUMBER_FONT, NUMBER_SIZE * ROW_WIDTH / width, "OUTLINE")
 	end
-end
-
-local function CreateLabel(parent, x, label)
-	local text = parent:CreateFontString(nil, "OVERLAY")
-	text:SetFont(STANDARD_TEXT_FONT, LABEL_SIZE, "")
-	text:SetShadowColor(0, 0, 0, 1)
-	text:SetShadowOffset(1, -1)
-	text:SetTextColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3])
-	text:SetText(label)
-	text:SetPoint("CENTER", parent, "TOP", x, LABEL_Y)
-	return text
 end
 
 local block = CreateFrame("Frame", nil, UIParent)
@@ -90,26 +78,24 @@ slotFrame:SetAtlas(SLOT_FRAME_ATLAS)
 slotFrame:SetSize(SLOT_FRAME_SIZE, SLOT_FRAME_SIZE)
 slotFrame:SetPoint("TOPLEFT")
 
--- A faint gold line between the columns, fading out at both ends.
-local dividerColor = CreateColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], DIVIDER_ALPHA)
-local dividerClear = CreateColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 0)
-local dividerTop = block:CreateTexture(nil, "ARTWORK")
-dividerTop:SetColorTexture(1, 1, 1, 1)
-dividerTop:SetSize(1, DIVIDER_HALF_HEIGHT)
-dividerTop:SetPoint("BOTTOM", block, "CENTER")
-dividerTop:SetGradient("VERTICAL", dividerColor, dividerClear)
-local dividerBottom = block:CreateTexture(nil, "ARTWORK")
-dividerBottom:SetColorTexture(1, 1, 1, 1)
-dividerBottom:SetSize(1, DIVIDER_HALF_HEIGHT)
-dividerBottom:SetPoint("TOP", block, "CENTER")
-dividerBottom:SetGradient("VERTICAL", dividerClear, dividerColor)
+-- A faint gold line between the rows, fading out at both ends.
+local dividerColor = CreateColor(DIVIDER_COLOR[1], DIVIDER_COLOR[2], DIVIDER_COLOR[3], DIVIDER_ALPHA)
+local dividerClear = CreateColor(DIVIDER_COLOR[1], DIVIDER_COLOR[2], DIVIDER_COLOR[3], 0)
+local dividerLeft = block:CreateTexture(nil, "ARTWORK")
+dividerLeft:SetColorTexture(1, 1, 1, 1)
+dividerLeft:SetSize(DIVIDER_HALF_WIDTH, 1)
+dividerLeft:SetPoint("RIGHT", block, "CENTER")
+dividerLeft:SetGradient("HORIZONTAL", dividerClear, dividerColor)
+local dividerRight = block:CreateTexture(nil, "ARTWORK")
+dividerRight:SetColorTexture(1, 1, 1, 1)
+dividerRight:SetSize(DIVIDER_HALF_WIDTH, 1)
+dividerRight:SetPoint("LEFT", block, "CENTER")
+dividerRight:SetGradient("HORIZONTAL", dividerColor, dividerClear)
 
-local fpsText = CreateNumber(block, -COLUMN_OFFSET)
+local fpsText = CreateNumber(block, ROW_OFFSET)
 fpsText:SetTextColor(1, 1, 1)
-CreateLabel(block, -COLUMN_OFFSET, "FPS")
 
-local worldText = CreateNumber(block, COLUMN_OFFSET)
-CreateLabel(block, COLUMN_OFFSET, "ms")
+local worldText = CreateNumber(block, -ROW_OFFSET)
 
 local function Update()
 	local _, _, _, latencyWorld = GetNetStats()

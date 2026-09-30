@@ -10,10 +10,12 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 
 - One bar segment: a slot the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`) inside the bar frame art the bags bar uses (`UI-HUD-ActionBar-Frame`).
 - It sits between the red help button (end of the micro menu) and the keychain (start of the bags bar), as part of the bar.
-- Two columns (design "AF"): FPS left, world latency right, the same size, each with a small label under it ("FPS", "ms") in muted gold in the game's text font. A faint gold line between the columns, fading at both ends.
+- Numbers only, no labels: FPS on top in white, world latency below in its color, both 18 px and centered, mirrored 9.5 px above and below a faint gold line at the slot's center (28 px wide, fading at both ends).
+- The slot background stays uniform, the same art as the bag slots.
 - World latency only on the face: it is the delay felt in combat and movement. Home latency (chat, mail, auction house) is in the tooltip. The user chose this after it was explained; readability at true size (45 px) was the reason.
-- Numbers are sized to read at true size. One too wide for its column (four-digit latency) shrinks to fit.
+- A number wider than the slot less a 5 px margin each side (four-digit latency) shrinks to fit.
 - Only the latency number changes color, with the game menu button's rule: green up to 300 ms, yellow over 300, red over 600. FPS stays white.
+- Look changes are mocked on the design canvas first and built after the user picks.
 - The numbers update once a second.
 - Tooltip: the game's own latency and framerate lines (`MAINMENUBAR_LATENCY_LABEL`, with home and world, and `MAINMENUBAR_FPS_LABEL`), then `v<VERSION>`.
 
