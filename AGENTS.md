@@ -8,9 +8,9 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 
 ## Look
 
-- One bar segment: a slot the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`) inside the bar frame art the bags bar uses (`UI-HUD-ActionBar-Frame`).
+- A slot the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`), and nothing more: an outer frame of its own made it pop next to the bag slots.
 - It sits between the red help button (end of the micro menu) and the keychain (start of the bags bar), as part of the bar.
-- Numbers only, no labels: FPS on top in white, world latency below in its color, both 18 px and centered, mirrored 9.5 px above and below a faint gold line at the slot's center (28 px wide, fading at both ends).
+- Numbers only, no labels: FPS on top in white, world latency below in its color, both 16 px, bold-looking (four copies: two outlined underneath, two plain on top, 1 px apart; there is no bold number font) and centered on the slot frame art, mirrored above and below a gold line at its center (32 px wide, fading at both ends). The number font sits low in its box, so numbers are raised 1 px.
 - The slot background stays uniform, the same art as the bag slots.
 - World latency only on the face: it is the delay felt in combat and movement. Home latency (chat, mail, auction house) is in the tooltip. The user chose this after it was explained; readability at true size (45 px) was the reason.
 - A number wider than the slot less a 5 px margin each side (four-digit latency) shrinks to fit.

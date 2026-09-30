@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.3"
+local VERSION = "0.4.4"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -9,13 +9,11 @@ local LOW_LATENCY = 300
 local MEDIUM_LATENCY = 600
 local UPDATE_INTERVAL = 1
 
--- One bar segment: a bag slot inside the frame art the bags bar uses.
+-- A bag slot: the size and art of the bag buttons on the bar.
 local SLOT_SIZE = 45
 local SLOT_BACKGROUND_ATLAS = "UI-HUD-ActionBar-IconFrame-Background"
 local SLOT_FRAME_ATLAS = "ui-hud-actionbar-iconframe-bags"
 local SLOT_FRAME_SIZE = 46
-local BAR_FRAME_ATLAS = "UI-HUD-ActionBar-Frame"
-local BAR_FRAME_LEFT, BAR_FRAME_TOP, BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM = -6, 6, 5, -5
 -- Space between bar segments, as Edit Mode leaves between the micro menu and the bags.
 local SEGMENT_GAP = 7
 local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
@@ -25,11 +23,14 @@ local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 -- one felt in combat; home latency and the labelled values are in the tooltip.
 local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
 local NUMBER_SIZE = 16
--- There is no bold number font, so numbers are drawn twice: the outlined number, and on top of
--- it the same number without outline one pixel to the right. Strokes get a pixel thicker and
--- the black outline stays on the outside.
+-- There is no bold number font, so each number is drawn four times, one pixel apart in pairs:
+-- two outlined copies underneath make one outline around both, and two plain copies on top
+-- fill the strokes solid. Strokes are a pixel thicker and stay clean.
 local NUMBER_OUTLINE = "OUTLINE"
 local BOLD_OFFSET = 1
+-- The number font sits low in its text box; raise the numbers so the room above and below
+-- them is even and each sits as far from the line.
+local NUMBER_RAISE = 1
 -- The rows mirror each other above and below the line.
 local ROW_OFFSET = 9.5
 -- Widest a number may be (the slot less a 5 px margin each side); wider ones shrink to fit.
@@ -39,8 +40,9 @@ local DIVIDER_HALF_WIDTH = 16
 local DIVIDER_ALPHA = 1
 
 local function SetNumberColor(number, r, g, b)
-	number.base:SetTextColor(r, g, b)
-	number.bold:SetTextColor(r, g, b)
+	for _, fill in ipairs(number.fills) do
+		fill:SetTextColor(r, g, b)
+	end
 end
 
 local function SetLatencyColor(number, latency)
@@ -56,27 +58,36 @@ end
 -- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
 -- 46 px frame is anchored at the top left of the 45 px slot, so its opening is centred half a
 -- pixel right of and below the slot's own centre.
--- The pair is centred as one: the outlined copy half the offset left, the bold copy half right.
+-- Each pair is centred as one: one copy half the offset left, the other half right.
 local function CreateNumber(parent, centre, y)
-	local number = {}
-	number.base = parent:CreateFontString(nil, "OVERLAY")
-	number.base:SetPoint("CENTER", centre, "CENTER", -BOLD_OFFSET / 2, y)
-	number.bold = parent:CreateFontString(nil, "OVERLAY")
-	number.bold:SetDrawLayer("OVERLAY", 1)
-	number.bold:SetPoint("CENTER", centre, "CENTER", BOLD_OFFSET / 2, y)
+	local number = { outlines = {}, fills = {} }
+	for i, x in ipairs({ -BOLD_OFFSET / 2, BOLD_OFFSET / 2 }) do
+		local outline = parent:CreateFontString(nil, "OVERLAY")
+		outline:SetPoint("CENTER", centre, "CENTER", x, y + NUMBER_RAISE)
+		outline:SetTextColor(0, 0, 0)
+		number.outlines[i] = outline
+		local fill = parent:CreateFontString(nil, "OVERLAY")
+		fill:SetDrawLayer("OVERLAY", 1)
+		fill:SetPoint("CENTER", centre, "CENTER", x, y + NUMBER_RAISE)
+		number.fills[i] = fill
+	end
 	return number
 end
 
 local function SetNumberSize(number, size)
-	number.base:SetFont(NUMBER_FONT, size, NUMBER_OUTLINE)
-	number.bold:SetFont(NUMBER_FONT, size, "")
+	for i = 1, 2 do
+		number.outlines[i]:SetFont(NUMBER_FONT, size, NUMBER_OUTLINE)
+		number.fills[i]:SetFont(NUMBER_FONT, size, "")
+	end
 end
 
 local function SetNumber(number, value)
 	SetNumberSize(number, NUMBER_SIZE)
-	number.base:SetText(value)
-	number.bold:SetText(value)
-	local width = number.base:GetStringWidth() + BOLD_OFFSET
+	for i = 1, 2 do
+		number.outlines[i]:SetText(value)
+		number.fills[i]:SetText(value)
+	end
+	local width = number.outlines[1]:GetStringWidth() + BOLD_OFFSET
 	if width > ROW_WIDTH then
 		SetNumberSize(number, NUMBER_SIZE * ROW_WIDTH / width)
 	end
@@ -86,11 +97,6 @@ local block = CreateFrame("Frame", nil, UIParent)
 block:SetSize(SLOT_SIZE, SLOT_SIZE)
 block:EnableMouse(true)
 block:Hide()
-
-local barFrame = block:CreateTexture(nil, "BACKGROUND", nil, -3)
-barFrame:SetAtlas(BAR_FRAME_ATLAS)
-barFrame:SetPoint("TOPLEFT", block, "TOPLEFT", BAR_FRAME_LEFT, BAR_FRAME_TOP)
-barFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM)
 
 local background = block:CreateTexture(nil, "BACKGROUND")
 background:SetAtlas(SLOT_BACKGROUND_ATLAS)
