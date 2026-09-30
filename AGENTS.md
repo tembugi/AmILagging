@@ -8,8 +8,8 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 
 ## Look
 
-- One slot, the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`).
-- It sits right of the micro menu, between the red help button and the keychain.
+- One bar segment: a slot the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`) inside the bar frame art the bags bar uses (`UI-HUD-ActionBar-Frame`).
+- It sits between the red help button (end of the micro menu) and the keychain (start of the bags bar), as part of the bar.
 - FPS is the main number, large and white, with a small "FPS" caption under it.
 - A faint gold divider, then home and world latency side by side, smaller, each with its caption ("Home", "World") under it.
 - Captions: muted gold, spaced letters (laid out letter by letter, since font strings have no letter spacing).
@@ -17,6 +17,17 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 - The numbers update once a second.
 - Tooltip: the game's own latency and framerate lines (`MAINMENUBAR_LATENCY_LABEL`, `MAINMENUBAR_FPS_LABEL`), then `v<VERSION>`.
 
+## Making room (agreed with the user)
+
+The addon makes room for itself, and removing it leaves no trace:
+- When Edit Mode attaches the bags bar by its left side, the bags bar moves one segment right (`BAGS_SHIFT`) while the addon runs, and the block takes its spot. Frames Edit Mode attached to the bags bar (the right gryphon) follow it.
+- The shift is applied in a `hooksecurefunc` on `BagsBar:SetPoint`, each time Edit Mode anchors the bags bar, from the anchor Edit Mode set.
+- While Edit Mode is open the shift is off and the block is hidden, so Edit Mode only sees and saves the layout's own positions.
+- When the bags bar is protected in combat, the move waits for `PLAYER_REGEN_ENABLED`.
+- If the bags bar is placed on its own (not attached by its left side), nothing moves and the block sits just left of it.
+
 ## Never
 
-- Never move, resize or re-anchor Blizzard's frames (the micro menu, the bags bar, the keychain). Edit Mode owns their positions.
+- Never save or change an Edit Mode layout (`C_EditMode.SaveLayouts` and the like). The user rejected it: removing the addon must leave the layout as it was.
+- Never move Blizzard frames other than the bags bar as described above.
+- No SavedVariables: nothing the addon does may outlive it.

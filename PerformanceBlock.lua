@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.1.1"
+local VERSION = "0.2.0"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -9,14 +9,16 @@ local LOW_LATENCY = 300
 local MEDIUM_LATENCY = 600
 local UPDATE_INTERVAL = 1
 
--- A bag slot: the size and art of the bag buttons on the bar.
+-- One bar segment: a bag slot inside the frame art the bags bar uses.
 local SLOT_SIZE = 45
 local SLOT_BACKGROUND_ATLAS = "UI-HUD-ActionBar-IconFrame-Background"
 local SLOT_FRAME_ATLAS = "ui-hud-actionbar-iconframe-bags"
 local SLOT_FRAME_SIZE = 46
-local GAP_AFTER_MICRO_MENU = 10
--- Bag buttons sit a level or two above their bar; stay clear of them.
-local ABOVE_BAGS_LEVELS = 10
+local BAR_FRAME_ATLAS = "UI-HUD-ActionBar-Frame"
+local BAR_FRAME_LEFT, BAR_FRAME_TOP, BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM = -6, 6, 5, -5
+-- Space between bar segments, as Edit Mode leaves between the micro menu and the bags.
+local SEGMENT_GAP = 7
+local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 
 -- The game's number font (NumberFont_Outline_Med uses the same file).
 local NUMBER_FONT = "Fonts\\ARIALN.TTF"
@@ -66,8 +68,13 @@ end
 
 local block = CreateFrame("Frame", nil, UIParent)
 block:SetSize(SLOT_SIZE, SLOT_SIZE)
-block:SetFrameStrata("MEDIUM")
 block:EnableMouse(true)
+block:Hide()
+
+local barFrame = block:CreateTexture(nil, "BACKGROUND", nil, -3)
+barFrame:SetAtlas(BAR_FRAME_ATLAS)
+barFrame:SetPoint("TOPLEFT", block, "TOPLEFT", BAR_FRAME_LEFT, BAR_FRAME_TOP)
+barFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM)
 
 local background = block:CreateTexture(nil, "BACKGROUND")
 background:SetAtlas(SLOT_BACKGROUND_ATLAS)
@@ -114,20 +121,78 @@ local function Update()
 	SetLatencyColor(worldText, latencyWorld)
 end
 
--- Right of the micro menu, where the red help button ends it. Drawn above the bags bar,
--- which Edit Mode may attach to the same spot.
-local function Place()
-	block:ClearAllPoints()
-	if MicroMenu then
-		block:SetPoint("LEFT", MicroMenu, "RIGHT", GAP_AFTER_MICRO_MENU, 0)
-		local level = MicroMenu:GetFrameLevel()
-		if BagsBar then
-			level = math.max(level, BagsBar:GetFrameLevel())
-		end
-		block:SetFrameLevel(level + ABOVE_BAGS_LEVELS)
-	else
-		block:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -8, 8)
+-- Making room on the bar. When Edit Mode attaches the bags bar by its left side (after the
+-- micro menu), the bags bar moves one segment right while the addon runs, and whatever Edit
+-- Mode attached to it (the right gryphon) follows. The block takes the freed spot.
+-- Nothing is saved: the layout is never written, Edit Mode anchors the bags again on every
+-- layout change, and the shift is taken off while Edit Mode is open so it only ever sees and
+-- saves the layout's own positions. Without the addon the bar is exactly as the layout says.
+local bagsAnchor -- the bags bar's anchor as Edit Mode set it
+local movingBags = false
+local editModeOpen = false
+local layoutPending = false
+
+local function RememberBagsAnchor()
+	local point, relativeTo, relativePoint, x, y = BagsBar:GetPoint(1)
+	if point then
+		bagsAnchor = { point, relativeTo or BagsBar:GetParent(), relativePoint, x, y }
 	end
+end
+
+local function SetBagsOffset(extraX)
+	movingBags = true
+	BagsBar:ClearAllPoints()
+	BagsBar:SetPoint(bagsAnchor[1], bagsAnchor[2], bagsAnchor[3], bagsAnchor[4] + extraX, bagsAnchor[5])
+	movingBags = false
+end
+
+local function Layout()
+	if not bagsAnchor then
+		return
+	end
+	-- The bar can be protected in combat; finish when combat ends.
+	if InCombatLockdown() and BagsBar:IsProtected() then
+		layoutPending = true
+		return
+	end
+	layoutPending = false
+
+	if editModeOpen then
+		SetBagsOffset(0)
+		block:Hide()
+		return
+	end
+
+	block:ClearAllPoints()
+	if bagsAnchor[1]:find("LEFT") then
+		SetBagsOffset(BAGS_SHIFT)
+		block:SetPoint(bagsAnchor[1], bagsAnchor[2], bagsAnchor[3], bagsAnchor[4], bagsAnchor[5])
+	else
+		-- Bags placed on their own: sit just left of them without moving anything.
+		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -SEGMENT_GAP, 0)
+	end
+	block:SetScale(BagsBar:GetScale())
+	block:SetFrameStrata(BagsBar:GetFrameStrata())
+	block:SetFrameLevel(BagsBar:GetFrameLevel())
+	block:Show()
+end
+
+local function OnBagsBarSetPoint()
+	if movingBags then
+		return
+	end
+	RememberBagsAnchor()
+	Layout()
+end
+
+local function OnEditModeEnter()
+	editModeOpen = true
+	Layout()
+end
+
+local function OnEditModeExit()
+	editModeOpen = false
+	Layout()
 end
 
 -- The same lines as the game menu button's tooltip, in the game's own words.
@@ -146,8 +211,24 @@ block:SetScript("OnLeave", GameTooltip_Hide)
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
-events:SetScript("OnEvent", function()
-	Place()
+events:RegisterEvent("PLAYER_REGEN_ENABLED")
+events:SetScript("OnEvent", function(_, event)
+	if event == "PLAYER_REGEN_ENABLED" then
+		if layoutPending then
+			Layout()
+		end
+		return
+	end
+
+	if not BagsBar then
+		return
+	end
+	hooksecurefunc(BagsBar, "SetPoint", OnBagsBarSetPoint)
+	EventRegistry:RegisterCallback("EditMode.Enter", OnEditModeEnter, block)
+	EventRegistry:RegisterCallback("EditMode.Exit", OnEditModeExit, block)
+	editModeOpen = EditModeManagerFrame and EditModeManagerFrame:IsEditModeActive() or false
+	RememberBagsAnchor()
+	Layout()
 	Update()
 	C_Timer.NewTicker(UPDATE_INTERVAL, Update)
 end)
