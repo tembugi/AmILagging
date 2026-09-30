@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.6"
+local VERSION = "0.5.7"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -30,7 +30,9 @@ local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Ou
 local NUMBER_SIZE = 16
 -- There is no bold number font, so each number is drawn four times, one pixel apart in pairs:
 -- two outlined copies underneath make one outline around both, and two plain copies on top
--- fill the strokes solid. Strokes are a pixel thicker and stay clean.
+-- fill the strokes solid. Strokes are a pixel thicker and stay clean. All four copies carry the
+-- number's color: the outlined ones are wider, so at a scaled position they can land a pixel
+-- off the plain ones, and only their outline may show, never a dark inside.
 local NUMBER_OUTLINE = "OUTLINE"
 local BOLD_OFFSET = 1
 -- The number font sits low in its text box; raise the numbers so the room above and below
@@ -45,8 +47,9 @@ local DIVIDER_HALF_WIDTH = 16
 local DIVIDER_ALPHA = 1
 
 local function SetNumberColor(number, r, g, b)
-	for _, fill in ipairs(number.fills) do
-		fill:SetTextColor(r, g, b)
+	for i = 1, 2 do
+		number.outlines[i]:SetTextColor(r, g, b)
+		number.fills[i]:SetTextColor(r, g, b)
 	end
 end
 
@@ -69,7 +72,6 @@ local function CreateNumber(parent, centre, y)
 	for i, x in ipairs({ -BOLD_OFFSET / 2, BOLD_OFFSET / 2 }) do
 		local outline = parent:CreateFontString(nil, "OVERLAY")
 		outline:SetPoint("CENTER", centre, "CENTER", x, y + NUMBER_RAISE)
-		outline:SetTextColor(0, 0, 0)
 		number.outlines[i] = outline
 		local fill = parent:CreateFontString(nil, "OVERLAY")
 		fill:SetDrawLayer("OVERLAY", 1)
