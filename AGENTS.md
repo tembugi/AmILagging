@@ -26,7 +26,7 @@ The addon makes room for itself, and removing it leaves no trace. Edit Mode lays
 - When the bags bar is attached by its left side, the block takes the bags bar's anchor, so it joins the micro menu exactly as the bags did.
 - The bags bar moves right so it joins the block the same way: the same overlap of group frames as the micro menu and bags had. The math is in UIParent units, since the micro menu and bags can be scaled apart.
 - When the bags hang off the micro menu container, the container moves left by half the row's growth, so the row grows evenly on both sides and stays centered under the XP bar and top row.
-- Both moves are applied in `hooksecurefunc`s on `BagsBar:SetPoint` and `MicroMenuContainer:SetPoint`, each time Edit Mode anchors them, from the anchor Edit Mode set.
+- Both moves are applied in `hooksecurefunc`s on `BagsBar:SetPoint` and `MicroMenuContainer:SetPoint`, each time Edit Mode anchors them, from the anchor Edit Mode set. The moves themselves use Edit Mode's plain `SetPointBase` and `ClearAllPointsBase`: its replaced `SetPoint` and `ClearAllPoints` also change snapping and flag anchor changes, which the addon must not do.
 - While Edit Mode is open the moves are off and the block is hidden, so Edit Mode only sees and saves the layout's own positions. On leaving Edit Mode the art is measured again.
 - When either frame is protected in combat, the move waits for `PLAYER_REGEN_ENABLED`.
 - If the bags bar is placed on its own (not attached by its left side), nothing moves and the block stands just left of it.

@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.1"
+local VERSION = "0.5.2"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -208,9 +208,14 @@ local editModeOpen = false
 local layoutPending = false
 
 -- A Blizzard frame the addon nudges sideways: it keeps the anchor Edit Mode last gave it and
--- sets it again with an extra x offset.
+-- sets it again with an extra x offset. Edit Mode replaces SetPoint and ClearAllPoints on its
+-- frames with versions that also update its snapping and flag an anchor change; the moves use
+-- the plain originals it keeps (SetPointBase, ClearAllPointsBase), so they change the position
+-- and nothing else.
 local function CreateMover(frame)
 	local mover = { frame = frame, moving = false }
+	local setPoint = frame.SetPointBase or frame.SetPoint
+	local clearAllPoints = frame.ClearAllPointsBase or frame.ClearAllPoints
 
 	function mover:Remember()
 		local point, relativeTo, relativePoint, x, y = frame:GetPoint(1)
@@ -224,8 +229,8 @@ local function CreateMover(frame)
 			return
 		end
 		self.moving = true
-		frame:ClearAllPoints()
-		frame:SetPoint(self.anchor[1], self.anchor[2], self.anchor[3], self.anchor[4] + extraX, self.anchor[5])
+		clearAllPoints(frame)
+		setPoint(frame, self.anchor[1], self.anchor[2], self.anchor[3], self.anchor[4] + extraX, self.anchor[5])
 		self.moving = false
 	end
 
