@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.1"
+local VERSION = "0.4.2"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -45,10 +45,13 @@ local function SetLatencyColor(text, latency)
 	end
 end
 
-local function CreateNumber(parent, y)
+-- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
+-- 46 px frame is anchored at the top left of the 45 px slot, so its opening is centred half a
+-- pixel right of and below the slot's own centre.
+local function CreateNumber(parent, centre, y)
 	local text = parent:CreateFontString(nil, "OVERLAY")
 	text:SetFont(NUMBER_FONT, NUMBER_SIZE, NUMBER_OUTLINE)
-	text:SetPoint("CENTER", parent, "CENTER", 0, y)
+	text:SetPoint("CENTER", centre, "CENTER", 0, y)
 	return text
 end
 
@@ -86,18 +89,18 @@ local dividerClear = CreateColor(DIVIDER_COLOR[1], DIVIDER_COLOR[2], DIVIDER_COL
 local dividerLeft = block:CreateTexture(nil, "ARTWORK")
 dividerLeft:SetColorTexture(1, 1, 1, 1)
 dividerLeft:SetSize(DIVIDER_HALF_WIDTH, 1)
-dividerLeft:SetPoint("RIGHT", block, "CENTER")
+dividerLeft:SetPoint("RIGHT", slotFrame, "CENTER")
 dividerLeft:SetGradient("HORIZONTAL", dividerClear, dividerColor)
 local dividerRight = block:CreateTexture(nil, "ARTWORK")
 dividerRight:SetColorTexture(1, 1, 1, 1)
 dividerRight:SetSize(DIVIDER_HALF_WIDTH, 1)
-dividerRight:SetPoint("LEFT", block, "CENTER")
+dividerRight:SetPoint("LEFT", slotFrame, "CENTER")
 dividerRight:SetGradient("HORIZONTAL", dividerColor, dividerClear)
 
-local fpsText = CreateNumber(block, ROW_OFFSET)
+local fpsText = CreateNumber(block, slotFrame, ROW_OFFSET)
 fpsText:SetTextColor(1, 1, 1)
 
-local worldText = CreateNumber(block, -ROW_OFFSET)
+local worldText = CreateNumber(block, slotFrame, -ROW_OFFSET)
 
 local function Update()
 	local _, _, _, latencyWorld = GetNetStats()
