@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.1.0"
+local VERSION = "0.1.1"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -15,6 +15,8 @@ local SLOT_BACKGROUND_ATLAS = "UI-HUD-ActionBar-IconFrame-Background"
 local SLOT_FRAME_ATLAS = "ui-hud-actionbar-iconframe-bags"
 local SLOT_FRAME_SIZE = 46
 local GAP_AFTER_MICRO_MENU = 10
+-- Bag buttons sit a level or two above their bar; stay clear of them.
+local ABOVE_BAGS_LEVELS = 10
 
 -- The game's number font (NumberFont_Outline_Med uses the same file).
 local NUMBER_FONT = "Fonts\\ARIALN.TTF"
@@ -32,11 +34,13 @@ local DIVIDER_WIDTH = 18
 local DIVIDER_ALPHA = 0.5
 local LATENCY_COLUMN_OFFSET = 9
 
+-- The caption is an empty texture the letters line up on, so everything stays on the
+-- block's own frame level.
 local function CreateCaption(parent, label)
-	local caption = CreateFrame("Frame", nil, parent)
+	local caption = parent:CreateTexture(nil, "ARTWORK")
 	local x, height = 0, 0
 	for i = 1, #label do
-		local letter = caption:CreateFontString(nil, "OVERLAY")
+		local letter = parent:CreateFontString(nil, "OVERLAY")
 		letter:SetFont(NUMBER_FONT, CAPTION_SIZE, "")
 		letter:SetShadowColor(0, 0, 0, 1)
 		letter:SetShadowOffset(0.5, -0.5)
@@ -110,12 +114,17 @@ local function Update()
 	SetLatencyColor(worldText, latencyWorld)
 end
 
--- Right of the micro menu, where the red help button ends it.
+-- Right of the micro menu, where the red help button ends it. Drawn above the bags bar,
+-- which Edit Mode may attach to the same spot.
 local function Place()
 	block:ClearAllPoints()
 	if MicroMenu then
 		block:SetPoint("LEFT", MicroMenu, "RIGHT", GAP_AFTER_MICRO_MENU, 0)
-		block:SetFrameLevel(MicroMenu:GetFrameLevel() + 1)
+		local level = MicroMenu:GetFrameLevel()
+		if BagsBar then
+			level = math.max(level, BagsBar:GetFrameLevel())
+		end
+		block:SetFrameLevel(level + ABOVE_BAGS_LEVELS)
 	else
 		block:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -8, 8)
 	end
