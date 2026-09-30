@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.5"
+local VERSION = "0.4.6"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -9,22 +9,26 @@ local LOW_LATENCY = 300
 local MEDIUM_LATENCY = 600
 local UPDATE_INTERVAL = 1
 
--- A bag slot: the size and art of the bag buttons on the bar.
+-- A group of one: an empty slot drawn like the game's own (background, slot art, frame, as in
+-- ActionButtonTemplate), inside the outer group frame the bags bar and micro menu use.
 local SLOT_SIZE = 45
 local SLOT_BACKGROUND_ATLAS = "UI-HUD-ActionBar-IconFrame-Background"
+local SLOT_ART_ATLAS = "ui-hud-actionbar-iconframe-slot"
 local SLOT_FRAME_ATLAS = "ui-hud-actionbar-iconframe-bags"
 local SLOT_FRAME_SIZE = 46
+local GROUP_FRAME_ATLAS = "UI-HUD-ActionBar-Frame"
+-- The group frame reaches past the slot as the bags bar's BorderArt reaches past its slots.
+local GROUP_ART_LEFT, GROUP_ART_TOP, GROUP_ART_RIGHT, GROUP_ART_BOTTOM = 6, 6, 5, 5
 -- Space between bar segments, as Edit Mode leaves between the micro menu and the bags.
 local SEGMENT_GAP = 7
--- Clearance around the slot art. The micro menu's frame art reaches 8 px past its buttons and
--- the bags bar's 6 px before its first slot (their BorderArt anchors), while Edit Mode leaves
--- only SEGMENT_GAP between them. The slot starts after the micro menu's frame art with a gap,
--- and the bags move far enough to leave the same gap after the 46 px slot art.
+-- Room for the group between its neighbours. The micro menu's frame art reaches 8 px past its
+-- buttons and the bags bar's 6 px before its first slot (their BorderArt anchors). The block's
+-- group frame keeps ART_GAP clear of both; the bags move right to make that room.
 local MICRO_MENU_ART_REACH = 8
 local BAGS_ART_REACH = 6
 local ART_GAP = 2
-local BLOCK_OFFSET = MICRO_MENU_ART_REACH + ART_GAP - SEGMENT_GAP
-local BAGS_SHIFT = BLOCK_OFFSET + SLOT_FRAME_SIZE + ART_GAP + BAGS_ART_REACH
+local BLOCK_OFFSET = MICRO_MENU_ART_REACH + ART_GAP + GROUP_ART_LEFT - SEGMENT_GAP
+local BAGS_SHIFT = BLOCK_OFFSET + SLOT_SIZE + GROUP_ART_RIGHT + ART_GAP + BAGS_ART_REACH
 
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
 -- centred, with a faint gold line between them at the slot's centre. World latency is the
@@ -106,9 +110,18 @@ block:SetSize(SLOT_SIZE, SLOT_SIZE)
 block:EnableMouse(true)
 block:Hide()
 
+local groupFrame = block:CreateTexture(nil, "BACKGROUND", nil, -3)
+groupFrame:SetAtlas(GROUP_FRAME_ATLAS)
+groupFrame:SetPoint("TOPLEFT", block, "TOPLEFT", -GROUP_ART_LEFT, GROUP_ART_TOP)
+groupFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", GROUP_ART_RIGHT, -GROUP_ART_BOTTOM)
+
 local background = block:CreateTexture(nil, "BACKGROUND")
 background:SetAtlas(SLOT_BACKGROUND_ATLAS)
 background:SetAllPoints()
+
+local slotArt = block:CreateTexture(nil, "BACKGROUND", nil, 1)
+slotArt:SetAtlas(SLOT_ART_ATLAS)
+slotArt:SetAllPoints()
 
 local slotFrame = block:CreateTexture(nil, "BORDER")
 slotFrame:SetAtlas(SLOT_FRAME_ATLAS)
@@ -189,7 +202,7 @@ local function Layout()
 		block:SetPoint(bagsAnchor[1], bagsAnchor[2], bagsAnchor[3], bagsAnchor[4] + BLOCK_OFFSET, bagsAnchor[5])
 	else
 		-- Bags placed on their own: sit just left of them without moving anything.
-		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(BAGS_ART_REACH + ART_GAP + SLOT_FRAME_SIZE - SLOT_SIZE), 0)
+		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(BAGS_ART_REACH + ART_GAP + GROUP_ART_RIGHT), 0)
 	end
 	block:SetScale(BagsBar:GetScale())
 	block:SetFrameStrata(BagsBar:GetFrameStrata())

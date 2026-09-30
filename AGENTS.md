@@ -8,7 +8,7 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 
 ## Look
 
-- A slot the size and art of the bag buttons (45x45, `UI-HUD-ActionBar-IconFrame-Background` and `ui-hud-actionbar-iconframe-bags`), and nothing more: an outer frame of its own made it pop next to the bag slots.
+- A group of one, like the micro menu and the bags: one 45x45 slot drawn as the game draws an empty slot (`UI-HUD-ActionBar-IconFrame-Background`, then `ui-hud-actionbar-iconframe-slot` for the gray inner edge, then the 46 px `ui-hud-actionbar-iconframe-bags` frame), inside its own outer group frame (`UI-HUD-ActionBar-Frame`, reaching 6 px left and top and 5 px right and bottom, as on the bags bar).
 - It sits between the red help button (end of the micro menu) and the keychain (start of the bags bar), as part of the bar.
 - Numbers only, no labels: FPS on top in white, world latency below in its color, both 16 px, bold-looking (four copies: two outlined underneath, two plain on top, 1 px apart; there is no bold number font) and centered on the slot frame art, mirrored above and below a gold line at its center (32 px wide, fading at both ends). The number font sits low in its box, so numbers are raised 1 px.
 - The slot background stays uniform, the same art as the bag slots.
@@ -22,7 +22,7 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 ## Making room (agreed with the user)
 
 The addon makes room for itself, and removing it leaves no trace:
-- When Edit Mode attaches the bags bar by its left side, the bags bar moves right (`BAGS_SHIFT`) while the addon runs, and the block takes the room. The slot art keeps 2 px clear of the micro menu's frame art (which reaches 8 px past its buttons) and of the bags bar's (6 px before its first slot). Frames Edit Mode attached to the bags bar (the right gryphon) follow it.
+- When Edit Mode attaches the bags bar by its left side, the bags bar moves right (`BAGS_SHIFT`) while the addon runs, and the block takes the room. The block's group frame keeps 2 px clear of the micro menu's frame art (which reaches 8 px past its buttons) and of the bags bar's (6 px before its first slot). Frames Edit Mode attached to the bags bar (the right gryphon) follow it.
 - The shift is applied in a `hooksecurefunc` on `BagsBar:SetPoint`, each time Edit Mode anchors the bags bar, from the anchor Edit Mode set.
 - While Edit Mode is open the shift is off and the block is hidden, so Edit Mode only sees and saves the layout's own positions.
 - When the bags bar is protected in combat, the move waits for `PLAYER_REGEN_ENABLED`.
