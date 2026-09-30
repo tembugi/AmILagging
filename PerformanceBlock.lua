@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.7"
+local VERSION = "0.6.0"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -26,18 +26,15 @@ local art = {
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
 -- centred, with a faint gold line between them at the slot's centre. World latency is the
 -- one felt in combat; home latency and the labelled values are in the tooltip.
-local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
+-- The numbers use the game's own heavy number font: the one behind NumberFont_Outline_Huge
+-- (Skurri for Latin alphabets, whatever Blizzard sets for other languages), just smaller.
+-- The standard game font stands in if that font is missing.
+local NUMBER_FONT_OBJECT = "NumberFont_Outline_Huge"
 local NUMBER_SIZE = 16
--- There is no bold number font, so each number is drawn four times, one pixel apart in pairs:
--- two outlined copies underneath make one outline around both, and two plain copies on top
--- fill the strokes solid. Strokes are a pixel thicker and stay clean. All four copies carry the
--- number's color: the outlined ones are wider, so at a scaled position they can land a pixel
--- off the plain ones, and only their outline may show, never a dark inside.
 local NUMBER_OUTLINE = "OUTLINE"
-local BOLD_OFFSET = 1
--- The number font sits low in its text box; raise the numbers so the room above and below
--- them is even and each sits as far from the line.
-local NUMBER_RAISE = 1
+-- Nudges the numbers up so the room above and below them is even; depends on the font's
+-- metrics, so it is set from how the font sits in game.
+local NUMBER_RAISE = 0
 -- The rows mirror each other above and below the line.
 local ROW_OFFSET = 9.5
 -- Room kept free on each side of a number; wider numbers (four-digit latency) shrink to fit.
@@ -46,58 +43,42 @@ local DIVIDER_COLOR = { 0.86, 0.74, 0.46 }
 local DIVIDER_HALF_WIDTH = 16
 local DIVIDER_ALPHA = 1
 
-local function SetNumberColor(number, r, g, b)
-	for i = 1, 2 do
-		number.outlines[i]:SetTextColor(r, g, b)
-		number.fills[i]:SetTextColor(r, g, b)
-	end
-end
+local numberFontObject = _G[NUMBER_FONT_OBJECT]
+local numberFont = numberFontObject and numberFontObject:GetFont() or STANDARD_TEXT_FONT
 
-local function SetLatencyColor(number, latency)
+local function SetLatencyColor(text, latency)
 	if latency > MEDIUM_LATENCY then
-		SetNumberColor(number, 1, 0, 0)
+		text:SetTextColor(1, 0, 0)
 	elseif latency > LOW_LATENCY then
-		SetNumberColor(number, 1, 1, 0)
+		text:SetTextColor(1, 1, 0)
 	else
-		SetNumberColor(number, 0, 1, 0)
+		text:SetTextColor(0, 1, 0)
 	end
 end
 
 -- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
 -- frame art is anchored at the top left of the slot and is a pixel larger, so its opening is
 -- centred half a pixel right of and below the slot's own centre.
--- Each pair is centred as one: one copy half the offset left, the other half right.
 local function CreateNumber(parent, centre, y)
-	local number = { outlines = {}, fills = {} }
-	for i, x in ipairs({ -BOLD_OFFSET / 2, BOLD_OFFSET / 2 }) do
-		local outline = parent:CreateFontString(nil, "OVERLAY")
-		outline:SetPoint("CENTER", centre, "CENTER", x, y + NUMBER_RAISE)
-		number.outlines[i] = outline
-		local fill = parent:CreateFontString(nil, "OVERLAY")
-		fill:SetDrawLayer("OVERLAY", 1)
-		fill:SetPoint("CENTER", centre, "CENTER", x, y + NUMBER_RAISE)
-		number.fills[i] = fill
-	end
-	return number
+	local text = parent:CreateFontString(nil, "OVERLAY")
+	text:SetPoint("CENTER", centre, "CENTER", 0, y + NUMBER_RAISE)
+	return text
 end
 
-local function SetNumberSize(number, size)
-	for i = 1, 2 do
-		number.outlines[i]:SetFont(NUMBER_FONT, size, NUMBER_OUTLINE)
-		number.fills[i]:SetFont(NUMBER_FONT, size, "")
+local function SetNumberSize(text, size)
+	if not text:SetFont(numberFont, size, NUMBER_OUTLINE) then
+		numberFont = STANDARD_TEXT_FONT
+		text:SetFont(numberFont, size, NUMBER_OUTLINE)
 	end
 end
 
-local function SetNumber(number, value)
-	SetNumberSize(number, NUMBER_SIZE)
-	for i = 1, 2 do
-		number.outlines[i]:SetText(value)
-		number.fills[i]:SetText(value)
-	end
+local function SetNumber(text, value)
+	SetNumberSize(text, NUMBER_SIZE)
+	text:SetText(value)
 	local maxWidth = art.slotSize - 2 * NUMBER_MARGIN
-	local width = number.outlines[1]:GetStringWidth() + BOLD_OFFSET
+	local width = text:GetStringWidth()
 	if width > maxWidth then
-		SetNumberSize(number, NUMBER_SIZE * maxWidth / width)
+		SetNumberSize(text, NUMBER_SIZE * maxWidth / width)
 	end
 end
 
@@ -128,7 +109,7 @@ dividerRight:SetPoint("LEFT", slotFrame, "CENTER")
 dividerRight:SetGradient("HORIZONTAL", dividerColor, dividerClear)
 
 local fpsText = CreateNumber(block, slotFrame, ROW_OFFSET)
-SetNumberColor(fpsText, 1, 1, 1)
+fpsText:SetTextColor(1, 1, 1)
 
 local worldText = CreateNumber(block, slotFrame, -ROW_OFFSET)
 
