@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.2.0"
+local VERSION = "0.3.0"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -20,41 +20,19 @@ local BAR_FRAME_LEFT, BAR_FRAME_TOP, BAR_FRAME_RIGHT, BAR_FRAME_BOTTOM = -6, 6, 
 local SEGMENT_GAP = 7
 local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
 
--- The game's number font (NumberFont_Outline_Med uses the same file).
-local NUMBER_FONT = "Fonts\\ARIALN.TTF"
-local FPS_SIZE = 11.5
-local LATENCY_SIZE = 7.5
-local CAPTION_SIZE = 4.1
--- Font strings have no letter spacing, so captions are laid out one letter at a time.
-local CAPTION_LETTER_SPACING = 0.5
-local CAPTION_COLOR = { 0.72, 0.64, 0.42 }
-
-local TOP_MARGIN = 5
-local CAPTION_GAP = 0.8
-local ROW_GAP = 2.8
-local DIVIDER_WIDTH = 18
-local DIVIDER_ALPHA = 0.5
-local LATENCY_COLUMN_OFFSET = 9
-
--- The caption is an empty texture the letters line up on, so everything stays on the
--- block's own frame level.
-local function CreateCaption(parent, label)
-	local caption = parent:CreateTexture(nil, "ARTWORK")
-	local x, height = 0, 0
-	for i = 1, #label do
-		local letter = parent:CreateFontString(nil, "OVERLAY")
-		letter:SetFont(NUMBER_FONT, CAPTION_SIZE, "")
-		letter:SetShadowColor(0, 0, 0, 1)
-		letter:SetShadowOffset(0.5, -0.5)
-		letter:SetTextColor(CAPTION_COLOR[1], CAPTION_COLOR[2], CAPTION_COLOR[3])
-		letter:SetText(label:sub(i, i))
-		letter:SetPoint("LEFT", caption, "LEFT", x, 0)
-		x = x + letter:GetStringWidth() + CAPTION_LETTER_SPACING
-		height = math.max(height, letter:GetStringHeight())
-	end
-	caption:SetSize(math.max(1, x - CAPTION_LETTER_SPACING), math.max(1, height))
-	return caption
-end
+-- The face: FPS and world latency side by side, each with a small label under it. World
+-- latency is the one felt in combat; home latency is in the tooltip.
+local NUMBER_FONT = "Fonts\\ARIALN.TTF" -- the game's number font (NumberFont_Outline_Med)
+local NUMBER_SIZE = 14
+local LABEL_SIZE = 8
+local LABEL_COLOR = { 0.72, 0.64, 0.42 }
+local COLUMN_OFFSET = 10.5 -- column centres, left and right of the slot's centre
+local NUMBER_Y = -19 -- centres, down from the slot's top
+local LABEL_Y = -33
+-- Widest a number may be; wider ones (four-digit latency) shrink to fit their column.
+local COLUMN_WIDTH = 20
+local DIVIDER_HALF_HEIGHT = 14
+local DIVIDER_ALPHA = 0.7
 
 local function SetLatencyColor(text, latency)
 	if latency > MEDIUM_LATENCY then
@@ -64,6 +42,33 @@ local function SetLatencyColor(text, latency)
 	else
 		text:SetTextColor(0, 1, 0)
 	end
+end
+
+local function CreateNumber(parent, x)
+	local text = parent:CreateFontString(nil, "OVERLAY")
+	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
+	text:SetPoint("CENTER", parent, "TOP", x, NUMBER_Y)
+	return text
+end
+
+local function SetNumber(text, value)
+	text:SetFont(NUMBER_FONT, NUMBER_SIZE, "OUTLINE")
+	text:SetText(value)
+	local width = text:GetStringWidth()
+	if width > COLUMN_WIDTH then
+		text:SetFont(NUMBER_FONT, NUMBER_SIZE * COLUMN_WIDTH / width, "OUTLINE")
+	end
+end
+
+local function CreateLabel(parent, x, label)
+	local text = parent:CreateFontString(nil, "OVERLAY")
+	text:SetFont(STANDARD_TEXT_FONT, LABEL_SIZE, "")
+	text:SetShadowColor(0, 0, 0, 1)
+	text:SetShadowOffset(1, -1)
+	text:SetTextColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3])
+	text:SetText(label)
+	text:SetPoint("CENTER", parent, "TOP", x, LABEL_Y)
+	return text
 end
 
 local block = CreateFrame("Frame", nil, UIParent)
@@ -85,39 +90,31 @@ slotFrame:SetAtlas(SLOT_FRAME_ATLAS)
 slotFrame:SetSize(SLOT_FRAME_SIZE, SLOT_FRAME_SIZE)
 slotFrame:SetPoint("TOPLEFT")
 
-local fpsText = block:CreateFontString(nil, "OVERLAY")
-fpsText:SetFont(NUMBER_FONT, FPS_SIZE, "OUTLINE")
+-- A faint gold line between the columns, fading out at both ends.
+local dividerColor = CreateColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], DIVIDER_ALPHA)
+local dividerClear = CreateColor(LABEL_COLOR[1], LABEL_COLOR[2], LABEL_COLOR[3], 0)
+local dividerTop = block:CreateTexture(nil, "ARTWORK")
+dividerTop:SetColorTexture(1, 1, 1, 1)
+dividerTop:SetSize(1, DIVIDER_HALF_HEIGHT)
+dividerTop:SetPoint("BOTTOM", block, "CENTER")
+dividerTop:SetGradient("VERTICAL", dividerColor, dividerClear)
+local dividerBottom = block:CreateTexture(nil, "ARTWORK")
+dividerBottom:SetColorTexture(1, 1, 1, 1)
+dividerBottom:SetSize(1, DIVIDER_HALF_HEIGHT)
+dividerBottom:SetPoint("TOP", block, "CENTER")
+dividerBottom:SetGradient("VERTICAL", dividerClear, dividerColor)
+
+local fpsText = CreateNumber(block, -COLUMN_OFFSET)
 fpsText:SetTextColor(1, 1, 1)
-fpsText:SetPoint("TOP", block, "TOP", 0, -TOP_MARGIN)
+CreateLabel(block, -COLUMN_OFFSET, "FPS")
 
-local fpsCaption = CreateCaption(block, "FPS")
-fpsCaption:SetPoint("TOP", fpsText, "BOTTOM", 0, -CAPTION_GAP)
-
-local divider = block:CreateTexture(nil, "ARTWORK")
-divider:SetColorTexture(CAPTION_COLOR[1], CAPTION_COLOR[2], CAPTION_COLOR[3], DIVIDER_ALPHA)
-divider:SetSize(DIVIDER_WIDTH, 1)
-divider:SetPoint("TOP", fpsCaption, "BOTTOM", 0, -ROW_GAP)
-
-local homeText = block:CreateFontString(nil, "OVERLAY")
-homeText:SetFont(NUMBER_FONT, LATENCY_SIZE, "OUTLINE")
-homeText:SetPoint("TOP", divider, "BOTTOM", -LATENCY_COLUMN_OFFSET, -ROW_GAP)
-
-local homeCaption = CreateCaption(block, "Home")
-homeCaption:SetPoint("TOP", homeText, "BOTTOM", 0, -CAPTION_GAP)
-
-local worldText = block:CreateFontString(nil, "OVERLAY")
-worldText:SetFont(NUMBER_FONT, LATENCY_SIZE, "OUTLINE")
-worldText:SetPoint("TOP", divider, "BOTTOM", LATENCY_COLUMN_OFFSET, -ROW_GAP)
-
-local worldCaption = CreateCaption(block, "World")
-worldCaption:SetPoint("TOP", worldText, "BOTTOM", 0, -CAPTION_GAP)
+local worldText = CreateNumber(block, COLUMN_OFFSET)
+CreateLabel(block, COLUMN_OFFSET, "ms")
 
 local function Update()
-	local _, _, latencyHome, latencyWorld = GetNetStats()
-	fpsText:SetText(math.floor(GetFramerate() + 0.5))
-	homeText:SetText(latencyHome)
-	worldText:SetText(latencyWorld)
-	SetLatencyColor(homeText, latencyHome)
+	local _, _, _, latencyWorld = GetNetStats()
+	SetNumber(fpsText, math.floor(GetFramerate() + 0.5))
+	SetNumber(worldText, latencyWorld)
 	SetLatencyColor(worldText, latencyWorld)
 end
 
