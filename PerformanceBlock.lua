@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.6.0"
+local VERSION = "0.6.1"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -32,11 +32,10 @@ local art = {
 local NUMBER_FONT_OBJECT = "NumberFont_Outline_Huge"
 local NUMBER_SIZE = 16
 local NUMBER_OUTLINE = "OUTLINE"
--- Nudges the numbers up so the room above and below them is even; depends on the font's
--- metrics, so it is set from how the font sits in game.
-local NUMBER_RAISE = 0
--- The rows mirror each other above and below the line.
-local ROW_OFFSET = 9.5
+-- How far each number's text box keeps from the line: FPS above it, latency below it. The
+-- box spans the font's full height, so no digit touches the line, even in a font whose
+-- figures rise and drop like this one's (6 and 8 rise, 3, 4, 5, 7 and 9 drop).
+local LINE_CLEARANCE = 3
 -- Room kept free on each side of a number; wider numbers (four-digit latency) shrink to fit.
 local NUMBER_MARGIN = 6.5
 local DIVIDER_COLOR = { 0.86, 0.74, 0.46 }
@@ -58,10 +57,15 @@ end
 
 -- Numbers and the line centre on the slot frame art, not the slot: like the bag buttons', the
 -- frame art is anchored at the top left of the slot and is a pixel larger, so its opening is
--- centred half a pixel right of and below the slot's own centre.
-local function CreateNumber(parent, centre, y)
+-- centred half a pixel right of and below the slot's own centre. The rows mirror each other:
+-- one number's box stands on the line, the other hangs from it.
+local function CreateNumber(parent, centre, aboveLine)
 	local text = parent:CreateFontString(nil, "OVERLAY")
-	text:SetPoint("CENTER", centre, "CENTER", 0, y + NUMBER_RAISE)
+	if aboveLine then
+		text:SetPoint("BOTTOM", centre, "CENTER", 0, LINE_CLEARANCE)
+	else
+		text:SetPoint("TOP", centre, "CENTER", 0, -LINE_CLEARANCE)
+	end
 	return text
 end
 
@@ -108,10 +112,10 @@ dividerRight:SetSize(DIVIDER_HALF_WIDTH, 1)
 dividerRight:SetPoint("LEFT", slotFrame, "CENTER")
 dividerRight:SetGradient("HORIZONTAL", dividerColor, dividerClear)
 
-local fpsText = CreateNumber(block, slotFrame, ROW_OFFSET)
+local fpsText = CreateNumber(block, slotFrame, true)
 fpsText:SetTextColor(1, 1, 1)
 
-local worldText = CreateNumber(block, slotFrame, -ROW_OFFSET)
+local worldText = CreateNumber(block, slotFrame, false)
 
 local function Update()
 	local _, _, _, latencyWorld = GetNetStats()
