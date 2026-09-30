@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.4"
+local VERSION = "0.5.5"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -240,7 +240,7 @@ local function CreateMover(frame)
 end
 
 local bags
-local rowMovers = {} -- frame -> mover, for the row's roots moved so far
+local rowMovers = {} -- frame -> mover, for the row's roots and stacked bars moved so far
 local OnMovedByBlizzard
 
 -- The frame at the top of a frame's anchor chain: the one that hangs off the screen itself.
@@ -315,6 +315,25 @@ local function StretchXPBars(rowGrowth)
 	end
 end
 
+-- The action bars stacked above the row (Camelot anchors them to the main action bar by their
+-- left edge). They are fixed buttons and cannot stretch like the XP bars, so they move right by
+-- half the row's growth to stay centred over it.
+local STACKED_BAR_NAMES = { "MultiBarBottomLeft", "MultiBarBottomRight", "StanceBar", "PetActionBar", "PossessActionBar" }
+
+local function StackedBars()
+	local bars = {}
+	for _, name in ipairs(STACKED_BAR_NAMES) do
+		local bar = _G[name]
+		if bar and bar.GetPoint then
+			local _, relativeTo = bar:GetPoint(1)
+			if relativeTo == MainActionBar then
+				bars[bar] = true
+			end
+		end
+	end
+	return bars
+end
+
 local function AnyProtected()
 	if BagsBar:IsProtected() then
 		return true
@@ -377,13 +396,22 @@ local function Layout()
 		bags:SetExtraX(rowGrowth / bagsScale)
 
 		-- Grow evenly: when the bags hang off the micro menu, each root of the row moves left by
-		-- half, once. Roots no longer in the row go back to where Edit Mode put them.
-		local roots = relativeTo == MicroMenuContainer and RowRoots() or {}
-		for frame in pairs(roots) do
+		-- half, once, and the action bars stacked above it move right by half to stay centred over
+		-- it. Frames no longer in either set go back to where Blizzard put them.
+		local shifts = {} -- frame -> shift in UIParent units
+		if relativeTo == MicroMenuContainer then
+			for frame in pairs(RowRoots()) do
+				shifts[frame] = -rowGrowth / 2
+			end
+			for bar in pairs(StackedBars()) do
+				shifts[bar] = rowGrowth / 2
+			end
+		end
+		for frame in pairs(shifts) do
 			RowMoverFor(frame)
 		end
 		for frame, mover in pairs(rowMovers) do
-			mover:SetExtraX(roots[frame] and -rowGrowth / 2 / frame:GetScale() or 0)
+			mover:SetExtraX((shifts[frame] or 0) / frame:GetScale())
 		end
 		StretchXPBars(relativeTo == MicroMenuContainer and rowGrowth or 0)
 	else
