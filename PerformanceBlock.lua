@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.5.0"
+local VERSION = "0.5.1"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -16,7 +16,7 @@ local art = {
 	slotSize = 45,
 	slotBackground = "UI-HUD-ActionBar-IconFrame-Background",
 	slotArt = "ui-hud-actionbar-iconframe-slot",
-	slotFrame = "ui-hud-actionbar-iconframe-bags",
+	slotFrame = "UI-HUD-ActionBar-IconFrame",
 	slotFrameSize = 46,
 	groupFrame = "UI-HUD-ActionBar-Frame",
 	groupReach = { left = 6, top = 6, right = 5, bottom = 5 },
@@ -155,9 +155,10 @@ local function AtlasOf(texture, fallback)
 	return texture and texture:GetAtlas() or fallback
 end
 
--- Read the art from the frames the block stands among: the bags bar's group frame, a bag
--- slot's size and frame art, an action button's empty-slot layers, and how far the micro
--- menu's group frame reaches past its buttons.
+-- Read the art from the frames the block stands among: the bags bar's group frame, the size
+-- and plain gray frame art of the reagent bag slot (regular bag slots wear a gold frame), an
+-- action button's empty-slot layers, and how far the micro menu's group frame reaches past
+-- its buttons.
 local function MeasureArt()
 	if BagsBar.BorderArt then
 		art.groupFrame = AtlasOf(BagsBar.BorderArt, art.groupFrame)
@@ -166,7 +167,7 @@ local function MeasureArt()
 	if MicroMenu and MicroMenu.BorderArt then
 		art.microMenuReachRight = ReachOf(MicroMenu.BorderArt, { right = art.microMenuReachRight }).right
 	end
-	local bagSlot = CharacterBag0Slot
+	local bagSlot = CharacterReagentBag0Slot
 	if bagSlot then
 		art.slotSize = bagSlot:GetWidth()
 		local normal = bagSlot:GetNormalTexture()
