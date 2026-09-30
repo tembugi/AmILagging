@@ -22,7 +22,7 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 ## Making room (agreed with the user)
 
 The addon makes room for itself, and removing it leaves no trace:
-- When Edit Mode attaches the bags bar by its left side, the bags bar moves one segment right (`BAGS_SHIFT`) while the addon runs, and the block takes its spot. Frames Edit Mode attached to the bags bar (the right gryphon) follow it.
+- When Edit Mode attaches the bags bar by its left side, the bags bar moves right (`BAGS_SHIFT`) while the addon runs, and the block takes the room. The slot art keeps 2 px clear of the micro menu's frame art (which reaches 8 px past its buttons) and of the bags bar's (6 px before its first slot). Frames Edit Mode attached to the bags bar (the right gryphon) follow it.
 - The shift is applied in a `hooksecurefunc` on `BagsBar:SetPoint`, each time Edit Mode anchors the bags bar, from the anchor Edit Mode set.
 - While Edit Mode is open the shift is off and the block is hidden, so Edit Mode only sees and saves the layout's own positions.
 - When the bags bar is protected in combat, the move waits for `PLAYER_REGEN_ENABLED`.

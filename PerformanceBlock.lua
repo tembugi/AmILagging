@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.4.4"
+local VERSION = "0.4.5"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -16,7 +16,15 @@ local SLOT_FRAME_ATLAS = "ui-hud-actionbar-iconframe-bags"
 local SLOT_FRAME_SIZE = 46
 -- Space between bar segments, as Edit Mode leaves between the micro menu and the bags.
 local SEGMENT_GAP = 7
-local BAGS_SHIFT = SLOT_SIZE + SEGMENT_GAP
+-- Clearance around the slot art. The micro menu's frame art reaches 8 px past its buttons and
+-- the bags bar's 6 px before its first slot (their BorderArt anchors), while Edit Mode leaves
+-- only SEGMENT_GAP between them. The slot starts after the micro menu's frame art with a gap,
+-- and the bags move far enough to leave the same gap after the 46 px slot art.
+local MICRO_MENU_ART_REACH = 8
+local BAGS_ART_REACH = 6
+local ART_GAP = 2
+local BLOCK_OFFSET = MICRO_MENU_ART_REACH + ART_GAP - SEGMENT_GAP
+local BAGS_SHIFT = BLOCK_OFFSET + SLOT_FRAME_SIZE + ART_GAP + BAGS_ART_REACH
 
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
 -- centred, with a faint gold line between them at the slot's centre. World latency is the
@@ -178,10 +186,10 @@ local function Layout()
 	block:ClearAllPoints()
 	if bagsAnchor[1]:find("LEFT") then
 		SetBagsOffset(BAGS_SHIFT)
-		block:SetPoint(bagsAnchor[1], bagsAnchor[2], bagsAnchor[3], bagsAnchor[4], bagsAnchor[5])
+		block:SetPoint(bagsAnchor[1], bagsAnchor[2], bagsAnchor[3], bagsAnchor[4] + BLOCK_OFFSET, bagsAnchor[5])
 	else
 		-- Bags placed on their own: sit just left of them without moving anything.
-		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -SEGMENT_GAP, 0)
+		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(BAGS_ART_REACH + ART_GAP + SLOT_FRAME_SIZE - SLOT_SIZE), 0)
 	end
 	block:SetScale(BagsBar:GetScale())
 	block:SetFrameStrata(BagsBar:GetFrameStrata())
