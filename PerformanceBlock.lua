@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.7.0"
+local VERSION = "0.7.1"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -454,9 +454,9 @@ block:SetScript("OnEnter", function(self)
 	local _, _, latencyHome, latencyWorld = GetNetStats()
 	GameTooltip_SetDefaultAnchor(GameTooltip, self)
 	GameTooltip_SetTitle(GameTooltip, ADDON_TITLE)
-	GameTooltip:AddLine(format(MAINMENUBAR_LATENCY_LABEL, latencyHome, latencyWorld), 1, 1, 1)
-	GameTooltip:AddLine(" ")
 	GameTooltip:AddLine(format(MAINMENUBAR_FPS_LABEL, GetFramerate()), 1, 1, 1)
+	GameTooltip:AddLine(" ")
+	GameTooltip:AddLine(format(MAINMENUBAR_LATENCY_LABEL, latencyHome, latencyWorld), 1, 1, 1)
 	GameTooltip:AddLine(" ")
 	GameTooltip:AddLine("v" .. VERSION, 0.5, 0.5, 0.5)
 	GameTooltip:Show()
