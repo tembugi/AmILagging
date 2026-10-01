@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.0.0"
+local VERSION = "1.1.0"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -8,9 +8,9 @@ local ADDON_TITLE = "Am I Lagging?"
 -- red over 600.
 local LOW_LATENCY = 300
 local MEDIUM_LATENCY = 600
-local LATENCY_GREEN = CreateColor(0, 1, 0)
-local LATENCY_YELLOW = CreateColor(1, 1, 0)
-local LATENCY_RED = CreateColor(1, 0, 0)
+local LATENCY_GREEN = CreateColor(0, 1, 0, 1)
+local LATENCY_YELLOW = CreateColor(1, 1, 0, 1)
+local LATENCY_RED = CreateColor(1, 0, 0, 1)
 -- Seconds between updates of the numbers.
 local UPDATE_INTERVAL = 1
 -- The tooltip's line under the framerate, in English like the addon's name.
@@ -28,8 +28,9 @@ local art = {
 }
 
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
--- centered, with a faint gold line between them at the slot's center. World latency is the
--- one felt in combat; home latency and the labeled values are in the tooltip.
+-- centered, with a line between them at the slot's center in home latency's color. World
+-- latency is the one felt in combat; home latency's number and the labeled values are in the
+-- tooltip.
 -- The numbers use the game's own heavy number font: the one behind NumberFont_Outline_Huge
 -- (Skurri for Latin alphabets, whatever Blizzard sets for other languages), just smaller.
 local NUMBER_FONT = NumberFont_Outline_Huge and NumberFont_Outline_Huge:GetFont() or STANDARD_TEXT_FONT
@@ -49,8 +50,6 @@ local BOX_DESCENT = 0.26
 local SLOT_EDGE = 3.5
 -- Room kept free on each side of a number; wider numbers (four-digit latency) shrink to fit.
 local NUMBER_MARGIN = 6.5
-local LINE_COLOR = CreateColor(0.86, 0.74, 0.46, 1)
-local LINE_FADED = CreateColor(0.86, 0.74, 0.46, 0)
 local LINE_HALF_WIDTH = 16
 local LINE_THICKNESS = 1
 
@@ -83,17 +82,15 @@ slotArt:SetAllPoints()
 local slotFrame = block:CreateTexture(nil, "BORDER")
 slotFrame:SetPoint("TOPLEFT")
 
--- The faint gold line between the rows, fading out at both ends.
+-- The line between the rows, fading out at both ends. UpdateNumbers colors it.
 local lineLeft = block:CreateTexture(nil, "ARTWORK")
 lineLeft:SetColorTexture(1, 1, 1, 1)
 lineLeft:SetSize(LINE_HALF_WIDTH, LINE_THICKNESS)
 lineLeft:SetPoint("RIGHT", slotFrame, "CENTER")
-lineLeft:SetGradient("HORIZONTAL", LINE_FADED, LINE_COLOR)
 local lineRight = block:CreateTexture(nil, "ARTWORK")
 lineRight:SetColorTexture(1, 1, 1, 1)
 lineRight:SetSize(LINE_HALF_WIDTH, LINE_THICKNESS)
 lineRight:SetPoint("LEFT", slotFrame, "CENTER")
-lineRight:SetGradient("HORIZONTAL", LINE_COLOR, LINE_FADED)
 
 local function CreateNumber(aboveLine)
 	local text = block:CreateFontString(nil, "OVERLAY")
@@ -147,8 +144,21 @@ local function ShowNumber(text, value)
 	end
 end
 
+-- The line takes home latency's color, with the same rule as the numbers.
+local function SetLineColor(color)
+	if color == lineLeft.color then
+		return
+	end
+	lineLeft.color = color
+	local r, g, b = color:GetRGB()
+	local faded = CreateColor(r, g, b, 0)
+	lineLeft:SetGradient("HORIZONTAL", faded, color)
+	lineRight:SetGradient("HORIZONTAL", color, faded)
+end
+
 local function UpdateNumbers()
-	local _, _, _, latencyWorld = GetNetStats()
+	local _, _, latencyHome, latencyWorld = GetNetStats()
+	SetLineColor(LatencyColor(latencyHome))
 	ShowNumber(fpsText, Round(GetFramerate()))
 	ShowNumber(worldText, latencyWorld)
 	worldText:SetTextColor(LatencyColor(latencyWorld):GetRGB())
