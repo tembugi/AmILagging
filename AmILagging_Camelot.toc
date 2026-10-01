@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Am I Lagging?
 ## Notes: FPS and latency in a slot on the bags bar, always in view.
-## Version: 0.9.0
+## Version: 1.0.0
 ## Author: tembugi
 ## IconAtlas: UI-HUD-MicroMenu-GameMenu-Mouseover
 ## Category: Performance
