@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.6.2"
+local VERSION = "0.7.0"
 -- The addon's name as the player sees it: the tooltip title.
 local ADDON_TITLE = "Performance Block"
 
@@ -9,18 +9,15 @@ local LOW_LATENCY = 300
 local MEDIUM_LATENCY = 600
 local UPDATE_INTERVAL = 1
 
--- The block is a group of one on the bar, dressed and spaced like its neighbours. Its art and
--- sizes are read from the game's own frames at login (see MeasureArt); these are only the
--- values Blizzard's XML sets today, used if a frame is missing.
+-- The block is a slot of the bags bar, dressed like the slots beside it. Its art and size are
+-- read from the game's own frames at login (see MeasureArt); these are only the values
+-- Blizzard's XML sets today, used if a frame is missing.
 local art = {
 	slotSize = 45,
 	slotBackground = "UI-HUD-ActionBar-IconFrame-Background",
 	slotArt = "ui-hud-actionbar-iconframe-slot",
 	slotFrame = "UI-HUD-ActionBar-IconFrame",
 	slotFrameSize = 46,
-	groupFrame = "UI-HUD-ActionBar-Frame",
-	groupReach = { left = 6, top = 6, right = 5, bottom = 5 },
-	microMenuReachRight = 8,
 }
 
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
@@ -113,7 +110,6 @@ local block = CreateFrame("Frame", nil, UIParent)
 block:EnableMouse(true)
 block:Hide()
 
-local groupFrame = block:CreateTexture(nil, "BACKGROUND", nil, -3)
 local background = block:CreateTexture(nil, "BACKGROUND")
 background:SetAllPoints()
 local slotArt = block:CreateTexture(nil, "BACKGROUND", nil, 1)
@@ -147,36 +143,14 @@ local function Update()
 	SetLatencyColor(worldText, latencyWorld)
 end
 
--- How far a texture reaches past its frame, from its TOPLEFT and BOTTOMRIGHT anchors.
-local function ReachOf(texture, fallback)
-	local reach = { left = fallback.left, top = fallback.top, right = fallback.right, bottom = fallback.bottom }
-	for i = 1, texture:GetNumPoints() do
-		local point, _, _, x, y = texture:GetPoint(i)
-		if point == "TOPLEFT" then
-			reach.left, reach.top = -x, y
-		elseif point == "BOTTOMRIGHT" then
-			reach.right, reach.bottom = x, -y
-		end
-	end
-	return reach
-end
-
 local function AtlasOf(texture, fallback)
 	return texture and texture:GetAtlas() or fallback
 end
 
--- Read the art from the frames the block stands among: the bags bar's group frame, the size
--- and plain gray frame art of the reagent bag slot (regular bag slots wear a gold frame), an
--- action button's empty-slot layers, and how far the micro menu's group frame reaches past
--- its buttons.
+-- Read the art from the frames the block stands among: the size and plain gray frame art of
+-- the reagent bag slot (regular bag slots wear a gold frame) and an action button's empty-slot
+-- layers.
 local function MeasureArt()
-	if BagsBar.BorderArt then
-		art.groupFrame = AtlasOf(BagsBar.BorderArt, art.groupFrame)
-		art.groupReach = ReachOf(BagsBar.BorderArt, art.groupReach)
-	end
-	if MicroMenu and MicroMenu.BorderArt then
-		art.microMenuReachRight = ReachOf(MicroMenu.BorderArt, { right = art.microMenuReachRight }).right
-	end
 	local bagSlot = CharacterReagentBag0Slot
 	if bagSlot then
 		art.slotSize = bagSlot:GetWidth()
@@ -197,27 +171,28 @@ local function DressBlock()
 	block:SetSize(art.slotSize, art.slotSize)
 	fpsText.placedSize = nil
 	worldText.placedSize = nil
-	groupFrame:SetAtlas(art.groupFrame)
-	groupFrame:ClearAllPoints()
-	groupFrame:SetPoint("TOPLEFT", block, "TOPLEFT", -art.groupReach.left, art.groupReach.top)
-	groupFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", art.groupReach.right, -art.groupReach.bottom)
 	background:SetAtlas(art.slotBackground)
 	slotArt:SetAtlas(art.slotArt)
 	slotFrame:SetAtlas(art.slotFrame)
 	slotFrame:SetSize(art.slotFrameSize, art.slotFrameSize)
 end
 
--- Making room on the bar. While the addon runs, the block takes the bags bar's place, joined to
--- the micro menu exactly as the bags were, and the bags move right to join the block the same
--- way. Then the whole row moves left by half that, so it grows evenly on both sides and stays
--- centred. What "the whole row" hangs off depends on the layout: in a saved layout the action
--- bar hangs off the micro menu, but Edit Mode places bars in their default position on the
--- screen itself. So the addon follows the anchors of the action bar and of the micro menu up
--- to the frames that hang off the screen, and moves each of those once.
+-- Making room on the bar. The block joins the bags bar the way the keyring does: it goes in the
+-- bags bar's own list of buttons, so the bags bar places it, spaces it and draws the divider
+-- beside it like its other buttons, and widens itself to hold it. Buttons stand in the order
+-- they joined, from the backpack outwards; the block joins last, so it is the first slot of
+-- the bar: right of the micro menu, left of the keyring.
+-- Edit Mode puts the row at a fixed spot, so a wider bags bar would make the row lean right.
+-- When the bags hang off the micro menu, the whole row moves left by half the growth, so it
+-- grows evenly on both sides and stays centred. What "the whole row" hangs off depends on the
+-- layout: in a saved layout the action bar hangs off the micro menu, but Edit Mode places bars
+-- in their default position on the screen itself. So the addon follows the anchors of the
+-- action bar and of the micro menu up to the frames that hang off the screen, and moves each
+-- of those once.
 -- Nothing is saved: the layout is never written, Edit Mode anchors these frames again on
--- every layout change, and the moves are taken off while Edit Mode is open so it only ever
--- sees and saves the layout's own positions. Without the addon the bar is exactly as the
--- layout says.
+-- every layout change, and while Edit Mode is open the block leaves the bags bar and the moves
+-- are taken off, so Edit Mode only ever sees and saves the layout's own positions. Without the
+-- addon the bar is exactly as the layout says.
 local editModeOpen = false
 local layoutPending = false
 
@@ -256,7 +231,7 @@ local function CreateMover(frame)
 	return mover
 end
 
-local bags
+local inBagsBar = false
 local rowMovers = {} -- frame -> mover, for the row's roots and stacked bars moved so far
 local OnMovedByBlizzard
 
@@ -363,6 +338,27 @@ local function StackedBars()
 	return bars
 end
 
+-- Put the block in the bags bar's list of buttons or take it out, and let the bags bar lay
+-- itself out again. Taking it out leaves the list as Blizzard made it.
+local function JoinBagsBar(join)
+	if join == inBagsBar then
+		return
+	end
+	inBagsBar = join
+	if join then
+		MainMenuBarBagManager:RegisterBagButton(block)
+	else
+		local buttons = MainMenuBarBagManager.allBagButtons
+		for i = #buttons, 1, -1 do
+			if buttons[i] == block then
+				table.remove(buttons, i)
+			end
+		end
+	end
+	block:SetShown(join)
+	BagsBar:Layout()
+end
+
 local function AnyProtected()
 	if BagsBar:IsProtected() then
 		return true
@@ -387,9 +383,6 @@ local function ResetRow()
 end
 
 local function Layout()
-	if not bags.anchor then
-		return
-	end
 	-- These frames can be protected in combat; finish when combat ends.
 	if InCombatLockdown() and AnyProtected() then
 		layoutPending = true
@@ -397,60 +390,35 @@ local function Layout()
 	end
 	layoutPending = false
 
-	if editModeOpen then
-		bags:SetExtraX(0)
-		ResetRow()
-		StretchXPBars(0)
-		block:Hide()
-		return
+	JoinBagsBar(not editModeOpen)
+
+	-- How much wider the row is, in UIParent units: the block and the bags bar's spacing, at the
+	-- bags bar's scale. Only a bags bar that runs sideways from the micro menu widens the row.
+	local rowGrowth = 0
+	local point, relativeTo = BagsBar:GetPoint(1)
+	if inBagsBar and BagsBar:IsHorizontal() and relativeTo == MicroMenuContainer and point and point:find("LEFT") then
+		rowGrowth = (block:GetWidth() + (BagsBar.bagPadding or 0)) * BagsBar:GetScale()
 	end
 
-	local point, relativeTo, relativePoint, x, y = unpack(bags.anchor)
-	block:SetScale(BagsBar:GetScale())
-	block:SetFrameStrata(BagsBar:GetFrameStrata())
-	block:SetFrameLevel(BagsBar:GetFrameLevel())
-	block:ClearAllPoints()
-
-	if point:find("LEFT") then
-		-- The block stands where the bags were, so it joins the micro menu as they did.
-		block:SetPoint(point, relativeTo, relativePoint, x, y)
-
-		-- The bags join the block as they joined the micro menu: the same overlap of group
-		-- frames. Worked in UIParent units, since the micro menu and bags can be scaled apart.
-		local bagsScale = BagsBar:GetScale()
-		local microMenuScale = MicroMenu and MicroMenu:GetScale() or 1
-		local join = x * bagsScale
-		local joinAfterBlock = join + (art.groupReach.right * bagsScale - art.microMenuReachRight * microMenuScale)
-		local rowGrowth = art.slotSize * bagsScale + joinAfterBlock
-		bags:SetExtraX(rowGrowth / bagsScale)
-
-		-- Grow evenly: when the bags hang off the micro menu, each root of the row moves left by
-		-- half, once, and the action bars stacked above it move right by half to stay centred over
-		-- it. Frames no longer in either set go back to where Blizzard put them.
-		local shifts = {} -- frame -> shift in UIParent units
-		if relativeTo == MicroMenuContainer then
-			for frame in pairs(RowRoots()) do
-				shifts[frame] = -rowGrowth / 2
-			end
-			for bar in pairs(StackedBars()) do
-				shifts[bar] = rowGrowth / 2
-			end
+	-- Grow evenly: each root of the row moves left by half, once, and the action bars stacked
+	-- above it move right by half to stay centred over it. Frames no longer in either set go
+	-- back to where Blizzard put them.
+	local shifts = {} -- frame -> shift in UIParent units
+	if rowGrowth ~= 0 then
+		for frame in pairs(RowRoots()) do
+			shifts[frame] = -rowGrowth / 2
 		end
-		for frame in pairs(shifts) do
-			RowMoverFor(frame)
+		for bar in pairs(StackedBars()) do
+			shifts[bar] = rowGrowth / 2
 		end
-		for frame, mover in pairs(rowMovers) do
-			mover:SetExtraX((shifts[frame] or 0) / frame:GetScale())
-		end
-		StretchXPBars(relativeTo == MicroMenuContainer and rowGrowth or 0)
-	else
-		-- Bags placed on their own: stand just left of them, joined the same way, and move nothing.
-		bags:SetExtraX(0)
-		ResetRow()
-		StretchXPBars(0)
-		block:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMLEFT", -(art.groupReach.right + art.groupReach.left), 0)
 	end
-	block:Show()
+	for frame in pairs(shifts) do
+		RowMoverFor(frame)
+	end
+	for frame, mover in pairs(rowMovers) do
+		mover:SetExtraX((shifts[frame] or 0) / frame:GetScale())
+	end
+	StretchXPBars(rowGrowth)
 end
 
 function OnMovedByBlizzard(mover)
@@ -471,6 +439,14 @@ local function OnEditModeExit()
 	MeasureArt()
 	DressBlock()
 	Layout()
+end
+
+-- The bags bar asks its buttons to follow its orientation and expand state; the block is
+-- square and always shown, like the keyring.
+function block:UpdateOrientation()
+end
+
+function block:SetBarExpanded()
 end
 
 -- The same lines as the game menu button's tooltip, in the game's own words.
@@ -498,18 +474,20 @@ events:SetScript("OnEvent", function(_, event)
 		return
 	end
 
-	if not (BagsBar and MicroMenuContainer) then
+	if not (BagsBar and BagsBar.Layout and MicroMenuContainer and MainMenuBarBagManager
+		and MainMenuBarBagManager.RegisterBagButton and MainMenuBarBagManager.allBagButtons) then
 		return
 	end
-	bags = CreateMover(BagsBar)
-	hooksecurefunc(BagsBar, "SetPoint", function() OnMovedByBlizzard(bags) end)
+	-- A child of the bags bar, so it takes the bar's scale and hides with it (in vehicles).
+	block:SetParent(BagsBar)
+	-- Whether the bags hang off the micro menu decides whether the row grows.
+	hooksecurefunc(BagsBar, "SetPoint", function() Layout() end)
 	EventRegistry:RegisterCallback("EditMode.Enter", OnEditModeEnter, block)
 	EventRegistry:RegisterCallback("EditMode.Exit", OnEditModeExit, block)
 	editModeOpen = EditModeManagerFrame and EditModeManagerFrame:IsEditModeActive() or false
 
 	MeasureArt()
 	DressBlock()
-	bags:Remember()
 	WatchStackedBars()
 	Layout()
 	Update()
