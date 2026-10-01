@@ -12,7 +12,8 @@ def ring(inset, radius, fill):
     d.rounded_rectangle([inset, inset, S - 1 - inset, S - 1 - inset], radius=radius, fill=fill)
 
 # Slot frame: gray metal edge, a dark seam, then the dark face.
-ring(0, 150, (28, 26, 24, 255))
+# Square and filled to the corners: no see-through corners showing the page behind.
+ring(0, 0, (28, 26, 24, 255))
 ring(24, 130, (128, 126, 122, 255))
 ring(56, 104, (62, 60, 57, 255))
 ring(80, 84, (20, 18, 17, 255))
