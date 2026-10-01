@@ -1,8 +1,8 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "0.7.2"
+local VERSION = "0.8.0"
 -- The addon's name as the player sees it: the tooltip title.
-local ADDON_TITLE = "Performance Block"
+local ADDON_TITLE = "Am I Lagging?"
 
 -- Same thresholds and colors as the latency bar on the game menu button.
 local LOW_LATENCY = 300
