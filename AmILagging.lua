@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.1.1"
+local VERSION = "1.1.2"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -21,7 +21,6 @@ local LIMITED_BY = "Limited by: %s"
 -- Blizzard's XML sets today, used if a frame is missing.
 local art = {
 	slotSize = 45,
-	slotBackground = "UI-HUD-ActionBar-IconFrame-Background",
 	slotFrame = "UI-HUD-ActionBar-IconFrame",
 	slotFrameSize = 46,
 }
@@ -71,8 +70,10 @@ local block = CreateFrame("Frame", nil, UIParent)
 block:EnableMouse(true)
 block:Hide()
 
+-- Solid black behind the numbers: the game's empty-slot background lets the world show through.
 local background = block:CreateTexture(nil, "BACKGROUND")
 background:SetAllPoints()
+background:SetColorTexture(0, 0, 0, 1)
 -- Like the bag buttons' frame art: anchored at the slot's top left and a pixel larger, so its
 -- opening is centered half a pixel right of and below the slot's own center. The numbers and
 -- the line center on it.
@@ -219,9 +220,8 @@ local function WidthOf(region, fallback)
 	return fallback
 end
 
--- Read the art from the frames the block stands among: the size and plain gray frame art of
--- the reagent bag slot (regular bag slots wear a gold frame) and an action button's dark
--- empty-slot background, without the slot's picture.
+-- Read the art from the frame the block stands among: the size and plain gray frame art of
+-- the reagent bag slot (regular bag slots wear a gold frame).
 local function MeasureArt()
 	local bagSlot = CharacterReagentBag0Slot
 	if bagSlot then
@@ -230,15 +230,10 @@ local function MeasureArt()
 		art.slotFrame = AtlasOf(normal, art.slotFrame)
 		art.slotFrameSize = WidthOf(normal, art.slotFrameSize)
 	end
-	local actionButton = ActionButton1
-	if actionButton then
-		art.slotBackground = AtlasOf(actionButton.SlotBackground, art.slotBackground)
-	end
 end
 
 local function DressBlock()
 	block:SetSize(art.slotSize, art.slotSize)
-	background:SetAtlas(art.slotBackground)
 	slotFrame:SetAtlas(art.slotFrame)
 	slotFrame:SetSize(art.slotFrameSize, art.slotFrameSize)
 	-- Lay the numbers out again for the new size.
