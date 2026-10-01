@@ -4,6 +4,7 @@
 ## Version: 0.8.0
 ## Author: tembugi
 ## IconAtlas: UI-HUD-MicroMenu-GameMenu-Mouseover
+## Category: Performance
 ## AllowLoadGameType: camelot
 
 AmILagging.lua
