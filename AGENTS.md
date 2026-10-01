@@ -17,7 +17,7 @@ The name is "Performance Block" (folder, repo and packages `PerformanceBlock`; `
 - Only the latency number changes color, with the game menu button's rule: green up to 300 ms, yellow over 300, red over 600. FPS stays white.
 - Look changes are mocked on the design canvas first and built after the user picks.
 - The numbers update once a second.
-- Tooltip: the game's own framerate and latency lines, FPS first to match the face (`MAINMENUBAR_FPS_LABEL`, then `MAINMENUBAR_LATENCY_LABEL` with home and world), then `v<VERSION>`.
+- Tooltip: the title, an empty line (as the game menu tooltip has), then the game's own framerate and latency lines, FPS first to match the face (`MAINMENUBAR_FPS_LABEL`, then `MAINMENUBAR_LATENCY_LABEL` with home and world), then `v<VERSION>`.
 
 ## Making room (agreed with the user)
 
