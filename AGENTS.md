@@ -4,7 +4,7 @@ Rules for this addon. The shared rules are in `../AGENTS.md`.
 
 A bag-slot-sized block on the bottom bar that always shows the framerate and the world latency, numbers the game menu button shows only in its tooltip. Agreed with the user.
 
-The name is "Am I Lagging?" (title case; `ADDON_TITLE` in the code, also the tooltip title and the start of chat lines). Folder, repo and packages are `AmILagging`, since "?" doesn't belong in file names. Renamed from "Performance Block" on 2026-10-01: the name says what the player wants to know. CurseForge search terms (fps, latency, ping) go in the summary, since the name has none. The `.toc` has `## Category: Performance` (the addon list groups by it and its search box matches it). The package ships the MIT license, like Just the Trees (user's choice, 2026-10-01).
+The name is "Am I Lagging?" (title case; `ADDON_TITLE` in the code, also the tooltip title and the start of chat lines). CurseForge project ID: 1720989. Folder, repo and packages are `AmILagging`, since "?" doesn't belong in file names. Renamed from "Performance Block" on 2026-10-01: the name says what the player wants to know. CurseForge search terms (fps, latency, ping) go in the summary, since the name has none. The `.toc` has `## Category: Performance` (the addon list groups by it and its search box matches it). The package ships the MIT license, like Just the Trees (user's choice, 2026-10-01).
 
 ## Look
 
