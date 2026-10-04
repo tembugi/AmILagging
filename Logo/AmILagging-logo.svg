@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 2048 2048">
+<defs>
+<filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="163.8"/></filter>
+<clipPath id="face"><rect x="80" y="80" width="1887" height="1887" rx="84"/></clipPath>
+<linearGradient id="line" x1="410" y1="0" x2="1638" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0.00" stop-color="#00FF00" stop-opacity="0.000"/><stop offset="0.05" stop-color="#00FF00" stop-opacity="0.158"/><stop offset="0.10" stop-color="#00FF00" stop-opacity="0.276"/><stop offset="0.15" stop-color="#00FF00" stop-opacity="0.382"/><stop offset="0.20" stop-color="#00FF00" stop-opacity="0.480"/><stop offset="0.25" stop-color="#00FF00" stop-opacity="0.574"/><stop offset="0.30" stop-color="#00FF00" stop-opacity="0.665"/><stop offset="0.35" stop-color="#00FF00" stop-opacity="0.752"/><stop offset="0.40" stop-color="#00FF00" stop-opacity="0.837"/><stop offset="0.45" stop-color="#00FF00" stop-opacity="0.919"/><stop offset="0.50" stop-color="#00FF00" stop-opacity="1.000"/><stop offset="0.55" stop-color="#00FF00" stop-opacity="0.919"/><stop offset="0.60" stop-color="#00FF00" stop-opacity="0.837"/><stop offset="0.65" stop-color="#00FF00" stop-opacity="0.752"/><stop offset="0.70" stop-color="#00FF00" stop-opacity="0.665"/><stop offset="0.75" stop-color="#00FF00" stop-opacity="0.574"/><stop offset="0.80" stop-color="#00FF00" stop-opacity="0.480"/><stop offset="0.85" stop-color="#00FF00" stop-opacity="0.382"/><stop offset="0.90" stop-color="#00FF00" stop-opacity="0.276"/><stop offset="0.95" stop-color="#00FF00" stop-opacity="0.158"/><stop offset="1.00" stop-color="#00FF00" stop-opacity="0.000"/></linearGradient>
+</defs>
+<rect x="0" y="0" width="2047" height="2047" rx="0" fill="#1C1A18"/>
+<rect x="24" y="24" width="1999" height="1999" rx="130" fill="#807E7A"/>
+<rect x="56" y="56" width="1935" height="1935" rx="104" fill="#3E3C39"/>
+<rect x="80" y="80" width="1887" height="1887" rx="84" fill="#141211"/>
+<g clip-path="url(#face)"><ellipse cx="1024.0" cy="696.32" rx="655.36" ry="573.44" fill="#3A342E" opacity="0.47" filter="url(#blur)"/></g>
+<rect x="410" y="1012.0" width="1228" height="24" fill="url(#line)"/>
+<text x="466.0" y="751.0" font-family="Georgia" font-weight="bold" font-size="552" fill="#FFFFFF" stroke="#000" stroke-width="76" stroke-linejoin="round" paint-order="stroke">FPS</text>
+<text x="441.0" y="1626.0" font-family="Georgia" font-weight="bold" font-size="512" fill="#00FF00" stroke="#000" stroke-width="70" stroke-linejoin="round" paint-order="stroke">ping</text>
+</svg>

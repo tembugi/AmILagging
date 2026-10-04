@@ -51,3 +51,7 @@ The addon makes room for itself, and removing it leaves no trace.
 - Never save or change an Edit Mode layout (`C_EditMode.SaveLayouts` and the like). The user rejected it: removing the addon must leave the layout as it was.
 - Never move Blizzard frames other than the roots of the bottom row and the bars stacked on it as described above. The bags bar's button list is the only Blizzard list the block joins (the user chose it, 2026-10-01); no other Blizzard lists (taint).
 - No SavedVariables: nothing the addon does may outlive it.
+
+## Logo
+
+`Logo/AmILagging-logo.svg` is the logo (the block's slot frame, white "FPS" over green "ping" and the line between them), redrawn as SVG from the first PIL script on 2026-10-04 (97% of pixels within 8 levels of the old PNG). `Logo/make_logo.py` renders the 400 x 400 CurseForge PNG and `Icon.tga`, the addon list's icon (`## IconTexture`; the user asked for the logos in game, 2026-10-04).
