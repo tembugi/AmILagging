@@ -59,8 +59,27 @@ local function CreateColorTable(r, g, b, a)
 	return color
 end
 
+-- OnShow and OnHide run when a frame becomes visible or stops being visible, also when that
+-- comes from a parent: FloatingChatFrame.lua says that when the top-level parent is hidden
+-- (Alt-Z), OnHide is called while IsShown() stays true. ASSUMED: a frame's script runs before
+-- its children's.
+local function VisibilityChanged(region, visible)
+	local script = region.scripts[visible and "OnShow" or "OnHide"]
+	if script then
+		script(region)
+	end
+	for _, child in ipairs(region.children) do
+		if child.shown then
+			VisibilityChanged(child, visible)
+		end
+	end
+end
+
 local function NewRegion(parent)
-	local region = { points = {}, width = 0, height = 0, scale = 1, shown = true, parent = parent, scripts = {}, events = {}, textures = {}, fontStrings = {} }
+	local region = { points = {}, width = 0, height = 0, scale = 1, shown = true, parent = parent, children = {}, scripts = {}, events = {}, textures = {}, fontStrings = {} }
+	if parent then
+		parent.children[#parent.children + 1] = region
+	end
 
 	-- Setting a point the region already has replaces it; others are kept.
 	function region:SetPoint(point, relativeTo, relativePoint, x, y)
@@ -117,25 +136,42 @@ local function NewRegion(parent)
 	function region:GetEffectiveScale()
 		return self.scale * (self.parent and self.parent:GetEffectiveScale() or 1)
 	end
-	function region:SetParent(newParent)
-		self.parent = newParent
-	end
 	function region:IsShown()
 		return self.shown
 	end
 	function region:IsVisible()
 		return self.shown and (not self.parent or self.parent:IsVisible())
 	end
-	-- OnShow and OnHide run when a frame's own shown state changes while its parent is visible.
+	function region:GetParent()
+		return self.parent
+	end
+	function region:SetParent(newParent)
+		local wasVisible = self:IsVisible()
+		if self.parent then
+			for i, child in ipairs(self.parent.children) do
+				if child == self then
+					table.remove(self.parent.children, i)
+					break
+				end
+			end
+		end
+		self.parent = newParent
+		if newParent then
+			newParent.children[#newParent.children + 1] = self
+		end
+		if self:IsVisible() ~= wasVisible then
+			VisibilityChanged(self, not wasVisible)
+		end
+	end
 	function region:SetShown(shown)
 		shown = not not shown
 		if shown == self.shown then
 			return
 		end
+		local wasVisible = self:IsVisible()
 		self.shown = shown
-		local script = self.scripts[shown and "OnShow" or "OnHide"]
-		if script and (not self.parent or self.parent:IsVisible()) then
-			script(self)
+		if self:IsVisible() ~= wasVisible then
+			VisibilityChanged(self, not wasVisible)
 		end
 	end
 	function region:Show()
@@ -726,6 +762,31 @@ Test("the row grows only when the bags bar runs sideways off the micro menu's ri
 	BagsBar:ClearAllPoints()
 	BagsBar:SetPoint("BOTTOMLEFT", MicroMenuContainer, "BOTTOMRIGHT", 7, -4)
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "back on the micro menu")
+end)
+
+-- ASSUMED: how another addon hides the bags bar. Parenting a Blizzard bar to a hidden frame of
+-- its own is a common way; the bar then stays shown but isn't on screen.
+Test("a bags bar another addon hid by parenting it to a hidden frame doesn't grow the row", function()
+	NewGame()
+	Login()
+	local hiddenFrame = CreateFrame("Frame", nil, UIParent)
+	hiddenFrame:Hide()
+	BagsBar:SetParent(hiddenFrame)
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu with the bags bar hidden")
+	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar with the bags bar hidden")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar with the bags bar hidden")
+	BagsBar:SetParent(UIParent)
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu with the bags bar back")
+end)
+
+Test("hiding the whole interface (Alt+Z) moves nothing", function()
+	NewGame()
+	Login()
+	UIParent:Hide()
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu while the interface is hidden")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar while the interface is hidden")
+	UIParent:Show()
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after")
 end)
 
 Test("if making room fails, the bar goes back to the game's and it says so once", function()

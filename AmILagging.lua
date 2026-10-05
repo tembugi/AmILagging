@@ -507,11 +507,26 @@ local function JoinBagsBar(join)
 	BagsBar:Layout()
 end
 
+-- Whether the bags bar is on screen: shown, with every frame above it up to the interface
+-- shown too. Another addon may hide the bar by parenting it to a hidden frame, so it stays
+-- shown but isn't seen. Hiding the whole interface (Alt+Z) hides UIParent and nothing else;
+-- the bar comes back with it, so that changes nothing.
+local function BagsBarOnScreen()
+	local frame = BagsBar
+	while frame and frame ~= UIParent do
+		if not frame:IsShown() then
+			return false
+		end
+		frame = frame:GetParent()
+	end
+	return true
+end
+
 -- How much wider the block makes the row, in UIParent units: the block and the bags bar's
--- spacing, at the bags bar's scale. Only a shown bags bar that runs sideways from the micro
--- menu's right side widens the row.
+-- spacing, at the bags bar's scale. Only a bags bar on screen that runs sideways from the
+-- micro menu's right side widens the row.
 local function RowGrowth()
-	if not inBagsBar or not BagsBar:IsShown() or not BagsBar:IsHorizontal() then
+	if not inBagsBar or not BagsBarOnScreen() or not BagsBar:IsHorizontal() then
 		return 0
 	end
 	local point, relativeTo = BagsBar:GetPoint(1)
