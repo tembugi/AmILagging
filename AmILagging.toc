@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Am I Lagging?
-## Notes: FPS and latency in a slot on the bags bar, always in view.
-## Version: 1.1.4
+## Notes: FPS and latency in a slot on the bottom bar, always in view.
+## Version: 1.2.0
 ## Author: tembugi
 ## IconTexture: Interface\AddOns\AmILagging\Icon
 ## Category: Performance

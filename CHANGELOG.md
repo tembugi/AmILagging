@@ -1,3 +1,4 @@
-## v1.1.4
+## v1.2.0
 
-- The addon list now shows Am I Lagging?'s own logo instead of a placeholder icon.
+- The block has a small bar of its own between the menu buttons and the bags, so it stays when the bags bar is hidden.
+- With the gamepad interface on, the block shows between the gamepad buttons and the XP bar.

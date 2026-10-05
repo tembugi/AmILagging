@@ -3,10 +3,13 @@
 --
 -- Every function in the addon is local to its file, so each test loads the unchanged file into a
 -- stand-in for the game and watches what it does to the frames. The stand-in is the bottom bar as
--- Camelot sets it up, copied from wow-ui-source (forever, 1.60.1): BagsBar.lua and
--- MainMenuBarBagManager.lua, Camelot's MainMenuBarBagButtons.xml, EditModeUtil.lua and
--- EditModePresetLayoutConstants.lua, EditModeSystemTemplates.lua (SetPointBase) and
--- EditModeManager.lua (how bars are stacked). Strings are from BlizzardInterfaceResources (enUS).
+-- Camelot sets it up, copied from wow-ui-source (forever, 1.60.1): Camelot's
+-- MainMenuBarBagButtons.xml (the bags bar and its frame art) and MainMenuBarMicroMenu.xml (the
+-- micro menu's frame art), EditModeUtil.lua and EditModePresetLayoutConstants.lua (how the row
+-- hangs together), EditModeSystemTemplates.lua (SetPointBase), EditModeManager.lua (how bars are
+-- stacked), MainActionBar.lua (what the gamepad interface hides), the gamepad action bars'
+-- MainActionBarFrame.xml and StatusTrackingBarConstants.lua. Strings and the gamepad API are from
+-- BlizzardInterfaceResources (enUS).
 -- What it assumes beyond the game's code is marked ASSUMED: a stand-in that behaves better than
 -- the game hides bugs.
 
@@ -30,11 +33,21 @@ local NUMBER_MARGIN = Constant("NUMBER_MARGIN")
 local NUMBER_SIZE = Constant("NUMBER_SIZE")
 local LINE_THICKNESS = Constant("LINE_THICKNESS")
 
--- Blizzard's values (Camelot's MainMenuBarBagButtons.xml): the bag slots are 45 wide with a
--- 46 wide frame, and the bags bar keeps 2 between buttons.
+-- Blizzard's values. Camelot's MainMenuBarBagButtons.xml: the bag slots are 45 wide with a 46
+-- wide frame, and the bags bar's frame art reaches 6 past its buttons on the left and top, 5 on
+-- the right and bottom. MainMenuBarMicroMenu.xml: the micro menu's frame art reaches 8 past it.
+-- EditModePresetLayoutConstants.lua: the bags bar hangs off the micro menu's bottom right, 7 to
+-- the right and 4 down.
 local SLOT_SIZE = 45
 local SLOT_FRAME_SIZE = 46
-local BAG_PADDING = 2
+local BAR_REACH_LEFT, BAR_REACH_TOP, BAR_REACH_RIGHT, BAR_REACH_BOTTOM = 6, 6, 5, 5
+local MICRO_MENU_REACH = 8
+local BAGS_JOIN_X, BAGS_JOIN_Y = 7, -4
+-- The gamepad action bars' frame stands 110 above the screen's bottom (MainActionBarFrame.xml);
+-- the XP bar is 17 tall (StatusTrackingBarConstants.lua). ASSUMED: in the gamepad interface the
+-- XP bar sits on the screen's bottom edge, as in the player's screenshot.
+local GAMEPAD_BUTTONS_BOTTOM = 110
+local XP_BAR_HEIGHT = 17
 -- ASSUMED: a player's UI scale and Edit Mode sizes, different from 1 so that mixing up units
 -- shows. Bars and the bags bar take their own scale on top of UIParent's.
 local UI_SCALE = 0.9
@@ -133,8 +146,31 @@ local function NewRegion(parent)
 	function region:SetScale(scale)
 		self.scale = scale
 	end
+	function region:GetScale()
+		return self.scale
+	end
 	function region:GetEffectiveScale()
 		return self.scale * (self.parent and self.parent:GetEffectiveScale() or 1)
+	end
+	-- ASSUMED: the stand-in doesn't lay frames out; a test gives a frame its edges in its own
+	-- units when the addon reads them.
+	function region:GetTop()
+		return self.top
+	end
+	function region:GetBottom()
+		return self.bottom
+	end
+	function region:SetFrameStrata(strata)
+		self.strata = strata
+	end
+	function region:GetFrameStrata()
+		return self.strata or "MEDIUM"
+	end
+	function region:SetFrameLevel(level)
+		self.level = level
+	end
+	function region:GetFrameLevel()
+		return self.level or 0
 	end
 	function region:IsShown()
 		return self.shown
@@ -243,10 +279,18 @@ end
 
 -- The frames Edit Mode manages keep their own SetPoint as SetPointBase and get Edit Mode's
 -- SetPoint in its place (EditModeSystemMixin:OnSystemLoad). Edit Mode's version also updates
--- snapping; the stand-in only passes the point on.
+-- snapping; the stand-in only passes the point on. ASSUMED: moveErrors makes the next moves
+-- fail, to see what the addon does when the game breaks under it.
 local function EditModeSystem(parent)
 	local frame = NewRegion(parent)
-	frame.SetPointBase = frame.SetPoint
+	local setPoint = frame.SetPoint
+	function frame:SetPointBase(...)
+		if game.moveErrors > 0 then
+			game.moveErrors = game.moveErrors - 1
+			error("move failed")
+		end
+		setPoint(self, ...)
+	end
 	frame.ClearAllPointsBase = frame.ClearAllPoints
 	function frame:SetPoint(...)
 		self:SetPointBase(...)
@@ -278,7 +322,7 @@ end
 -- then the addon loaded. Options change the game before the addon loads.
 local function NewGame(options)
 	options = options or {}
-	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, layoutErrors = 0, layouts = 0 }
+	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0 }
 
 	print = function(...)
 		game.chat[#game.chat + 1] = table.concat({ ... }, " ")
@@ -379,27 +423,24 @@ local function NewGame(options)
 
 	-- The bottom row: the micro menu hangs off the screen, the main action bar off the micro
 	-- menu, the bags bar off its right side (Camelot's preset layout constants).
+	BAGS_ANCHOR_POINT, BAGS_ANCHOR_RELATIVE_POINT = "BOTTOMLEFT", "BOTTOMRIGHT"
+	BAGS_ANCHOR_OFFSET_X, BAGS_ANCHOR_OFFSET_Y = BAGS_JOIN_X, BAGS_JOIN_Y
 	MicroMenuContainer = EditModeSystem(UIParent)
 	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+	MicroMenu = NewRegion(MicroMenuContainer)
+	MicroMenu.BorderArt = MicroMenu:CreateTexture()
+	MicroMenu.BorderArt:SetPoint("TOPLEFT", MicroMenu, "TOPLEFT", -MICRO_MENU_REACH, MICRO_MENU_REACH)
+	MicroMenu.BorderArt:SetPoint("BOTTOMRIGHT", MicroMenu, "BOTTOMRIGHT", MICRO_MENU_REACH, -MICRO_MENU_REACH)
 	MainActionBar = EditModeSystem(UIParent)
 	MainActionBar:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "BOTTOMLEFT", -4.5, -4)
 	BagsBar = EditModeSystem(UIParent)
 	BagsBar.scale = BAGS_SCALE
-	BagsBar.isHorizontal = true
-	BagsBar.bagPadding = BAG_PADDING
-	BagsBar:SetPoint("BOTTOMLEFT", MicroMenuContainer, "BOTTOMRIGHT", 7, -4)
-	function BagsBar:IsHorizontal()
-		return self.isHorizontal
-	end
-	-- Lays out the buttons in its list (not modeled). ASSUMED: layoutErrors makes it fail, to
-	-- see what the addon does when Blizzard's code breaks under it.
-	function BagsBar:Layout()
-		game.layouts = game.layouts + 1
-		if game.layoutErrors > 0 then
-			game.layoutErrors = game.layoutErrors - 1
-			error("layout failed")
-		end
-	end
+	BagsBar.level = 52
+	BagsBar:SetPoint(BAGS_ANCHOR_POINT, MicroMenuContainer, BAGS_ANCHOR_RELATIVE_POINT, BAGS_JOIN_X, BAGS_JOIN_Y)
+	BagsBar.BorderArt = BagsBar:CreateTexture()
+	BagsBar.BorderArt.atlas = "UI-HUD-ActionBar-Frame"
+	BagsBar.BorderArt:SetPoint("TOPLEFT", BagsBar, "TOPLEFT", -BAR_REACH_LEFT, BAR_REACH_TOP)
+	BagsBar.BorderArt:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMRIGHT", BAR_REACH_RIGHT, -BAR_REACH_BOTTOM)
 
 	CharacterReagentBag0Slot = NewRegion(BagsBar)
 	CharacterReagentBag0Slot.width = SLOT_SIZE
@@ -408,13 +449,6 @@ local function NewGame(options)
 	function CharacterReagentBag0Slot:GetNormalTexture()
 		return slotFrame
 	end
-	MainMenuBarBagManager = { allBagButtons = { "backpack", "bag 1", "bag 2", "bag 3", "bag 4", CharacterReagentBag0Slot, "keyring" } }
-	function MainMenuBarBagManager:RegisterBagButton(bagButton)
-		if not tContains(self.allBagButtons, bagButton) then
-			table.insert(self.allBagButtons, bagButton)
-		end
-	end
-	game.blizzardBagButtons = { unpack(MainMenuBarBagManager.allBagButtons) }
 
 	-- The bars Camelot stacks on the main action bar by their left edge
 	-- (UpdateBottomActionBarPositions with ACTION_BARS_RELATIVE_TO_BASE_POSITIONING).
@@ -430,13 +464,23 @@ local function NewGame(options)
 		y = y + 20
 		bar:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, y)
 	end
-	Enum = { InputDeviceInterfaceType = { Gamepad = 1 } }
+
+	-- The gamepad interface: the gamepad action bars' frame, hidden until the game switches.
+	GamepadMainActionBarFrame = NewRegion(UIParent)
+	GamepadMainActionBarFrame.shown = false
+	GamepadMainActionBarFrame.bottom = GAMEPAD_BUTTONS_BOTTOM
+	Enum = { InputDeviceInterfaceType = { Mkb = 0, Gamepad = 1 } }
+	C_InputInterfaceStyle = {}
+	function C_InputInterfaceStyle.GetCurrentStyle()
+		return game.gamepad and Enum.InputDeviceInterfaceType.Gamepad or Enum.InputDeviceInterfaceType.Mkb
+	end
 	EditModeManagerFrame = {}
 	function EditModeManagerFrame:IsEditModeActive()
 		return game.editMode
 	end
+	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
-		return {}
+		return { interfaceStyle = C_InputInterfaceStyle.GetCurrentStyle() }
 	end
 	EditModeUtil = {}
 	function EditModeUtil.GetBottomActionBars()
@@ -464,7 +508,7 @@ local function NewGame(options)
 	-- The addon's frames, in the order it makes them: the block, then its event frame.
 	game.block = game.frames[1]
 	game.fpsText, game.worldText = game.block.fontStrings[1], game.block.fontStrings[2]
-	game.slotFrame, game.lineLeft = game.block.textures[2], game.block.textures[3]
+	game.barFrame, game.slotFrame, game.lineLeft = game.block.textures[1], game.block.textures[3], game.block.textures[4]
 	return game
 end
 
@@ -484,18 +528,44 @@ local function Tick()
 	game.ticker.func()
 end
 
-local function InBagsBar()
-	return tContains(MainMenuBarBagManager.allBagButtons, game.block)
-end
-
 local function OffsetX(frame, point)
 	local _, _, _, x = frame:GetPointByName(point or "BOTTOMLEFT")
 	return x
 end
 
--- How much wider the block makes the row, in UIParent units: the block and the bags bar's
--- spacing, at the bags bar's scale.
-local GROWTH = (SLOT_SIZE + BAG_PADDING) * BAGS_SCALE
+-- The game switches interfaces as MainActionBar.lua's gamepad init and uninit do: the row's bars
+-- hide or show, the gamepad buttons show or hide, and the XP bar goes to the screen's bottom or
+-- back onto the row. ASSUMED: the gamepad buttons' frame shows with the gamepad interface.
+local function SwitchToGamepad()
+	game.gamepad = true
+	MainActionBar:Hide()
+	StanceBar:Hide()
+	MicroMenu:Hide()
+	BagsBar:Hide()
+	GamepadMainActionBarFrame:Show()
+	MainStatusTrackingBarContainer.top = XP_BAR_HEIGHT
+	MainStatusTrackingBarContainer:ClearAllPoints()
+	MainStatusTrackingBarContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+	FireEvent("INPUT_DEVICE_INTERFACE_TRANSITION")
+end
+
+local function SwitchToKeyboard()
+	game.gamepad = false
+	GamepadMainActionBarFrame:Hide()
+	MainActionBar:Show()
+	MicroMenu:Show()
+	BagsBar:Show()
+	MainStatusTrackingBarContainer:ClearAllPoints()
+	MainStatusTrackingBarContainer:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, 40)
+	FireEvent("INPUT_DEVICE_INTERFACE_TRANSITION")
+end
+
+-- How much wider the block makes the row, in UIParent units, and how far right the bags bar
+-- moves: the slot and the join, less the difference between the micro menu's reach and the
+-- block's, so the bags join the block with the same overlap as they joined the micro menu. The
+-- micro menu's reach is in its own scale (1), the rest in the bags bar's.
+local GROWTH_IN_BAGS_UNITS = SLOT_SIZE + BAGS_JOIN_X + BAR_REACH_RIGHT - MICRO_MENU_REACH / BAGS_SCALE
+local GROWTH = GROWTH_IN_BAGS_UNITS * BAGS_SCALE
 
 --------------------------------------------------------------------------------
 -- Tests
@@ -577,11 +647,11 @@ Test("no updates while the block is hidden", function()
 	NewGame()
 	Login()
 	local texts = game.fpsText.setTexts
-	BagsBar:Hide()
+	MicroMenu:Hide()
 	game.fps = 30
 	Tick()
 	Equal(game.fpsText.setTexts, texts, "updated while hidden")
-	BagsBar:Show()
+	MicroMenu:Show()
 	Tick()
 	Equal(game.fpsText.text, "30", "updated when shown again")
 end)
@@ -658,17 +728,36 @@ Test("the tooltip shows the game's lines and leaves out what the game doesn't kn
 	Equal(game.tooltip[4], " ", "no limited-by line")
 end)
 
-Test("the block joins the bags bar as its last button, dressed from the reagent slot", function()
+Test("the block is a bar of its own by the micro menu, where the bags bar hung, dressed like it", function()
 	NewGame()
 	Login()
-	local buttons = MainMenuBarBagManager.allBagButtons
-	Equal(buttons[#buttons], game.block, "last button")
-	Equal(#buttons, #game.blizzardBagButtons + 1, "buttons")
-	Equal(game.block.parent, BagsBar, "parent")
+	local point, relativeTo, relativePoint, x, y = game.block:GetPoint(1)
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "anchor")
+	Equal(relativeTo, MicroMenuContainer, "anchored to")
+	Equal(game.block.parent, UIParent, "parent")
+	Equal(game.block:IsShown(), true, "shown")
+	Equal(game.block.scale, BAGS_SCALE, "the bags bar's size setting")
+	Equal(game.block.level, BagsBar.level, "the bags bar's level")
 	Equal(game.block:GetWidth(), SLOT_SIZE, "size")
-	Equal(game.slotFrame.atlas, "UI-HUD-ActionBar-IconFrame", "frame art")
-	Equal(game.slotFrame:GetWidth(), SLOT_FRAME_SIZE, "frame art size")
-	Equal(game.layouts > 0, true, "bags bar laid out")
+	Equal(game.slotFrame.atlas, "UI-HUD-ActionBar-IconFrame", "slot frame art")
+	Equal(game.slotFrame:GetWidth(), SLOT_FRAME_SIZE, "slot frame art size")
+	Equal(game.barFrame.atlas, "UI-HUD-ActionBar-Frame", "bar frame art")
+	local _, _, _, left, top = game.barFrame:GetPointByName("TOPLEFT")
+	local _, _, _, right, bottom = game.barFrame:GetPointByName("BOTTOMRIGHT")
+	Equal(table.concat({ left, top, right, bottom }, " "), table.concat({ -BAR_REACH_LEFT, BAR_REACH_TOP, BAR_REACH_RIGHT, -BAR_REACH_BOTTOM }, " "), "bar frame reach")
+end)
+
+Test("the bags bar joins the block as it joined the micro menu, with the same overlap", function()
+	NewGame()
+	Login()
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar, in its own units")
+	-- In the bags bar's units, from the micro menu's right edge.
+	local microMenuReach = MICRO_MENU_REACH / BAGS_SCALE
+	local blockLeft, blockRight = BAGS_JOIN_X, BAGS_JOIN_X + SLOT_SIZE
+	local bagsLeft = OffsetX(BagsBar)
+	local overlapBefore = microMenuReach + BAR_REACH_LEFT - blockLeft
+	local overlapAfter = (blockRight + BAR_REACH_RIGHT) - (bagsLeft - BAR_REACH_LEFT)
+	Near(overlapAfter, overlapBefore, "overlap of frame art")
 end)
 
 Test("the row grows evenly: the row moves left by half, the bars above move right by half or stretch", function()
@@ -695,6 +784,21 @@ Test("a bar the player moved elsewhere is left alone", function()
 	Near(OffsetX(MultiBarBottomLeft), GROWTH / 2 / STACKED_BAR_SCALE, "stacked bar")
 end)
 
+Test("a bags bar the player hung elsewhere stays there; the block joins the micro menu as the layout would", function()
+	NewGame()
+	Login()
+	BagsBar:ClearAllPoints()
+	BagsBar:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+	Equal(OffsetX(BagsBar, "BOTTOMRIGHT"), -10, "bags bar")
+	local point, relativeTo, relativePoint, x, y = game.block:GetPoint(1)
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "block anchor")
+	Equal(relativeTo, MicroMenuContainer, "block anchored to")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu")
+	BagsBar:ClearAllPoints()
+	BagsBar:SetPoint(BAGS_ANCHOR_POINT, MicroMenuContainer, BAGS_ANCHOR_RELATIVE_POINT, BAGS_JOIN_X, BAGS_JOIN_Y)
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar back on the micro menu")
+end)
+
 Test("when Blizzard places a frame again, the move goes on top of Blizzard's new point", function()
 	NewGame()
 	Login()
@@ -708,114 +812,167 @@ Test("when Blizzard places a frame again, the move goes on top of Blizzard's new
 	MicroMenuContainer:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 100, -900)
 	Near(OffsetX(MicroMenuContainer, "BOTTOMLEFT"), 100 - GROWTH / 2, "first point")
 	Near(OffsetX(MicroMenuContainer, "TOPLEFT"), 100 - GROWTH / 2, "second point")
+	-- The bags bar placed again by Edit Mode, a little further out.
+	BagsBar:ClearAllPoints()
+	BagsBar:SetPoint(BAGS_ANCHOR_POINT, MicroMenuContainer, BAGS_ANCHOR_RELATIVE_POINT, 9, BAGS_JOIN_Y)
+	Near(OffsetX(BagsBar), 9 + (GROWTH_IN_BAGS_UNITS + 9 - BAGS_JOIN_X), "bags bar")
 	-- The Size setting resizes the XP bar: the new width is the base for the stretch.
 	MainStatusTrackingBarContainer:SetWidth(600)
-	Near(MainStatusTrackingBarContainer:GetWidth(), 600 + GROWTH, "resized XP bar")
+	Near(MainStatusTrackingBarContainer:GetWidth(), 600 + GROWTH + (9 - BAGS_JOIN_X) * BAGS_SCALE, "resized XP bar")
 end)
 
-Test("in Edit Mode the bar is exactly the layout's, and it comes back after", function()
+Test("in Edit Mode the bar is exactly the layout's, and the block comes back after", function()
 	NewGame()
 	Login()
 	game.callbacks["EditMode.Enter"]()
-	Equal(InBagsBar(), false, "block in the bags bar")
-	Equal(table.concat(MainMenuBarBagManager.allBagButtons, ",", 1, 5) .. #MainMenuBarBagManager.allBagButtons, table.concat(game.blizzardBagButtons, ",", 1, 5) .. #game.blizzardBagButtons, "Blizzard's own list")
 	Equal(game.block:IsShown(), false, "block shown")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
 	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
 	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar")
 	game.callbacks["EditMode.Exit"]()
-	Equal(InBagsBar(), true, "block back")
+	Equal(game.block:IsShown(), true, "block back")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar after")
 end)
 
-Test("starting in Edit Mode keeps the block out until it closes", function()
+Test("starting in Edit Mode keeps the block hidden until it closes", function()
 	NewGame({ before = function() game.editMode = true end })
 	Login()
-	Equal(InBagsBar(), false, "block in the bags bar")
+	Equal(game.block:IsShown(), false, "block shown")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
 end)
 
 Test("in combat every change waits for the end of combat", function()
 	NewGame()
 	Login()
 	game.combat = true
-	BagsBar:Hide()
+	MicroMenu:Hide()
+	Equal(game.block:IsShown(), true, "block in combat")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu in combat")
 	MainStatusTrackingBarContainer:SetWidth(600)
 	Equal(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar in combat")
 	game.combat = false
 	FireEvent("PLAYER_REGEN_ENABLED")
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu after combat (bags hidden)")
-	Near(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar after combat (bags hidden)")
-end)
-
-Test("the row grows only when the bags bar runs sideways off the micro menu's right side", function()
-	NewGame()
-	Login()
-	BagsBar.isHorizontal = false
-	BagsBar:SetPoint("BOTTOMLEFT", MicroMenuContainer, "BOTTOMRIGHT", 7, -4)
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "vertical bags bar")
-	BagsBar.isHorizontal = true
-	BagsBar:ClearAllPoints()
-	BagsBar:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "bags bar on the screen's corner")
-	BagsBar:ClearAllPoints()
-	BagsBar:SetPoint("BOTTOMLEFT", MicroMenuContainer, "BOTTOMRIGHT", 7, -4)
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "back on the micro menu")
+	Equal(game.block:IsShown(), false, "block after combat (no micro menu)")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu after combat")
+	Near(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar after combat")
 end)
 
 -- ASSUMED: how another addon hides the bags bar. Parenting a Blizzard bar to a hidden frame of
 -- its own is a common way; the bar then stays shown but isn't on screen.
-Test("a bags bar another addon hid by parenting it to a hidden frame doesn't grow the row", function()
+Test("the block stays when the bags bar is hidden, however it was hidden", function()
+	NewGame()
+	Login()
+	BagsBar:Hide()
+	Equal(game.block:IsVisible(), true, "block with the bags bar hidden")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu with the bags bar hidden")
+	BagsBar:Show()
+	local hiddenFrame = CreateFrame("Frame", nil, UIParent)
+	hiddenFrame:Hide()
+	BagsBar:SetParent(hiddenFrame)
+	Equal(game.block:IsVisible(), true, "block with the bags bar in a hidden frame")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu with the bags bar in a hidden frame")
+end)
+
+Test("without the micro menu on screen the block hides and nothing moves, until it's back", function()
 	NewGame()
 	Login()
 	local hiddenFrame = CreateFrame("Frame", nil, UIParent)
 	hiddenFrame:Hide()
-	BagsBar:SetParent(hiddenFrame)
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu with the bags bar hidden")
-	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar with the bags bar hidden")
-	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar with the bags bar hidden")
-	BagsBar:SetParent(UIParent)
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu with the bags bar back")
+	MicroMenu:SetParent(hiddenFrame)
+	Equal(game.block:IsShown(), false, "block without the micro menu")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
+	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar")
+	MicroMenu:SetParent(MicroMenuContainer)
+	Equal(game.block:IsShown(), true, "block with the micro menu back")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu back")
 end)
 
 Test("hiding the whole interface (Alt+Z) moves nothing", function()
 	NewGame()
 	Login()
 	UIParent:Hide()
+	Equal(game.block:IsShown(), true, "block while the interface is hidden")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu while the interface is hidden")
 	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar while the interface is hidden")
 	UIParent:Show()
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after")
 end)
 
+-- Where the block stands in the gamepad interface: centered between the XP bar's top and the
+-- gamepad buttons' bottom, in the block's own units (UIParent units over the bags bar's scale).
+local GAMEPAD_HEIGHT = (XP_BAR_HEIGHT + GAMEPAD_BUTTONS_BOTTOM) / 2 / BAGS_SCALE
+
+Test("in the gamepad interface the block stands between the gamepad buttons and the XP bar, and nothing moves", function()
+	NewGame()
+	Login()
+	SwitchToGamepad()
+	Equal(game.block:IsVisible(), true, "block shown")
+	local point, relativeTo, relativePoint, x, y = game.block:GetPoint(1)
+	Equal(table.concat({ point, relativePoint, x }, " "), "CENTER BOTTOM 0", "anchor")
+	Equal(relativeTo, UIParent, "anchored to")
+	Near(y, GAMEPAD_HEIGHT, "height")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
+	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar")
+	SwitchToKeyboard()
+	point, relativeTo = game.block:GetPoint(1)
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back by the micro menu")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu back")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar back")
+end)
+
+Test("logging in with the gamepad interface puts the block between the gamepad buttons and the XP bar", function()
+	NewGame({ before = function()
+		game.gamepad = true
+		MicroMenu.shown, BagsBar.shown, MainActionBar.shown = false, false, false
+		GamepadMainActionBarFrame.shown = true
+		MainStatusTrackingBarContainer.top = XP_BAR_HEIGHT
+		MainStatusTrackingBarContainer:ClearAllPoints()
+		MainStatusTrackingBarContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 0)
+	end })
+	Login()
+	local point, _, _, _, y = game.block:GetPoint(1)
+	Equal(point, "CENTER", "anchor")
+	Near(y, GAMEPAD_HEIGHT, "height")
+	-- Blizzard moves the XP bar up (a second bar to track): the block follows.
+	MainStatusTrackingBarContainer.top = XP_BAR_HEIGHT * 2
+	MainStatusTrackingBarContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, XP_BAR_HEIGHT)
+	_, _, _, _, y = game.block:GetPoint(1)
+	Near(y, (XP_BAR_HEIGHT * 2 + GAMEPAD_BUTTONS_BOTTOM) / 2 / BAGS_SCALE, "height after the XP bar moved")
+end)
+
 Test("if making room fails, the bar goes back to the game's and it says so once", function()
-	NewGame({ before = function() game.layoutErrors = 1 end })
+	NewGame({ before = function() game.moveErrors = 1 end })
 	Login()
 	Equal(#game.errors, 1, "errors reported")
 	Equal(#game.chat, 1, "chat lines")
-	Equal(InBagsBar(), false, "block in the bags bar")
+	Equal(game.block:IsShown(), false, "block shown")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
 	-- Later moves keep the bar as the game set it, without more messages.
 	MultiBarBottomLeft:ClearAllPoints()
 	MultiBarBottomLeft:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, 80)
-	BagsBar:Hide()
-	BagsBar:Show()
+	MicroMenu:Hide()
+	MicroMenu:Show()
 	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
-	Equal(InBagsBar(), false, "block in the bags bar after")
+	Equal(game.block:IsShown(), false, "block shown after")
 	Equal(#game.chat, 1, "chat lines after")
 end)
 
 Test("if even putting the bar back fails, the addon leaves the bar alone", function()
-	NewGame({ before = function() game.layoutErrors = 2 end })
+	NewGame({ before = function() game.moveErrors = 2 end })
 	Login()
 	Equal(#game.errors, 2, "errors reported")
 	Equal(#game.chat, 1, "chat lines")
-	local layouts = game.layouts
-	BagsBar:Hide()
-	BagsBar:Show()
+	MicroMenu:Hide()
+	MicroMenu:Show()
 	MainStatusTrackingBarContainer:SetWidth(600)
-	Equal(game.layouts, layouts, "bags bar laid out again")
 	Equal(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar")
 	-- Its hooks stay quiet even while the game keeps failing.
 	game.brokenPoints = true
@@ -825,11 +982,11 @@ Test("if even putting the bar back fails, the addon leaves the bar alone", funct
 	Equal(#game.chat, 1, "chat lines after")
 end)
 
-Test("without the bags bar it says so and stays off", function()
-	NewGame({ before = function() BagsBar = nil end })
+Test("without the micro menu it says so and stays off", function()
+	NewGame({ before = function() MicroMenuContainer = nil end })
 	Login()
 	Equal(#game.chat, 1, "chat lines")
-	Equal(game.chat[1]:find("bags bar", 1, true) ~= nil, true, "names the bags bar")
+	Equal(game.chat[1]:find("micro menu", 1, true) ~= nil, true, "names the micro menu")
 	Equal(game.ticker, nil, "updates")
 end)
 
