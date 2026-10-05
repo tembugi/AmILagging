@@ -604,6 +604,14 @@ Test("the version matches the .toc", function()
 	Equal(SOURCE:match('\nlocal VERSION = "([^"]+)"'), toc:match("## Version: (%S+)"), "VERSION")
 end)
 
+-- Versions 0.8.0 to 1.1.2 shipped AmILagging_Camelot.toc, which the game reads before
+-- AmILagging.toc. An exact copy replaces a stale one when an update is unzipped over an old folder.
+Test("AmILagging_Camelot.toc is an exact copy of AmILagging.toc", function()
+	local toc = assert(io.open("AmILagging.toc")):read("*a")
+	local camelot = assert(io.open("AmILagging_Camelot.toc"), "AmILagging_Camelot.toc missing"):read("*a")
+	Equal(camelot == toc, true, "same text")
+end)
+
 Test("latency is green up to 300 ms, yellow over 300 and red over 600", function()
 	NewGame()
 	Login()
