@@ -613,11 +613,21 @@ local function NewGame(options)
 		_G[name] = EditModeSystem(UIParent)
 		_G[name].scale = STACKED_BAR_SCALE
 	end
-	local y = 0
-	for _, bar in ipairs({ SecondaryStatusTrackingBarContainer, MainStatusTrackingBarContainer, MultiBarBottomRight, MultiBarBottomLeft, StanceBar, PetActionBar, PossessActionBar, MainMenuBarVehicleLeaveButton }) do
-		y = y + 20
-		bar:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, y)
+	-- UpdateBottomActionBarPositions places each of them again, cleared and set, and the action bar
+	-- too while it is in its default position (SetToLayoutAnchor).
+	function game.LayOutBottomBars()
+		if not game.actionBarMoved then
+			MainActionBar:ClearAllPoints()
+			MainActionBar:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "BOTTOMLEFT", -4.5, -4)
+		end
+		local y = 0
+		for _, bar in ipairs({ SecondaryStatusTrackingBarContainer, MainStatusTrackingBarContainer, MultiBarBottomRight, MultiBarBottomLeft, StanceBar, PetActionBar, PossessActionBar, MainMenuBarVehicleLeaveButton }) do
+			y = y + 20
+			bar:ClearAllPoints()
+			bar:SetPoint("BOTTOMLEFT", MainActionBar, "BOTTOMLEFT", 0, y)
+		end
 	end
+	game.LayOutBottomBars()
 
 	-- The gamepad interface: the gamepad action bars' frame, hidden until the game switches.
 	GamepadMainActionBarFrame = NewRegion(UIParent)
@@ -665,6 +675,24 @@ local function NewGame(options)
 	-- Unselects the game's bars and closes its settings dialog (EditModeManager.lua).
 	function EditModeManagerFrame:ClearSelectedSystem()
 		game.selectedSystem = nil
+	end
+	-- After the player drops a bar or moves it with the arrow keys (EditModeManager.lua,
+	-- OnSystemPositionChange and UpdateSystemAnchorInfo): a point the client left without a
+	-- relativeTo is set again on UIParent, twice (the second time to correct its height), and only
+	-- then is the bar marked as moved from its default position. A bottom bar then has the bottom
+	-- bars laid out again (UpdateActionBarLayout).
+	function EditModeManagerFrame:OnSystemPositionChange(systemFrame)
+		local point, relativeTo, relativePoint, x, y = systemFrame:GetPoint(1)
+		if not relativeTo then
+			systemFrame:SetPoint(point, UIParent, relativePoint, x, y)
+			systemFrame:SetPoint(point, UIParent, relativePoint, x, y)
+		end
+		if systemFrame == MicroMenuContainer then
+			game.microMenuMoved = true
+		elseif systemFrame == MainActionBar then
+			game.actionBarMoved = true
+			game.LayOutBottomBars()
+		end
 	end
 	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
@@ -1257,13 +1285,39 @@ local function LaidOut(blockX, blockY, menuX, menuY)
 	MicroMenuContainer.centerX, MicroMenuContainer.centerY = menuX, menuY
 end
 
--- The player drags the micro menu in Edit Mode: it leaves Blizzard's default spot and Edit Mode
--- anchors it where it was dropped.
+-- The player drags one of the game's bars in Edit Mode and drops it (EditModeSystemMixin's
+-- OnDragStart and OnDragStop). The client moves the bar itself (StartMoving, StopMovingOrSizing):
+-- it replaces the bar's points without the Lua SetPoint, so no hook sees it, and leaves the point
+-- without a relativeTo (UpdateSystemAnchorInfo: "If we don't have a relativeTo"). Edit Mode then
+-- takes it from there (OnSystemPositionChange). during() runs while the bar is in the player's
+-- hand: the game's own work going on meanwhile.
+-- ASSUMED: the point the client anchors the dragged bar by; a test passes it.
+local function EditModeDrag(frame, point, x, y, during)
+	frame.isDragging = true
+	frame.points = { { point, nil, point, x, y } }
+	if during then
+		during()
+	end
+	frame.isDragging = false
+	frame.points = { { point, nil, point, x, y } }
+	EditModeManagerFrame:OnSystemPositionChange(frame)
+end
+
+-- The player drags the micro menu in Edit Mode and drops it with its center at menuX, menuY.
 local function MoveMicroMenu(menuX, menuY)
-	game.microMenuMoved = true
 	MicroMenuContainer.centerX, MicroMenuContainer.centerY = menuX, menuY
+	EditModeDrag(MicroMenuContainer, "CENTER", menuX, menuY)
+end
+
+-- Edit Mode's Revert All Changes, also what leaving it without saving does (RevertAllChanges):
+-- it clears the selection, then lays out the saved layout again, which puts the micro menu back
+-- where Blizzard's layout puts it.
+local function RevertAllChanges()
+	EditModeManagerFrame:ClearSelectedSystem()
+	game.microMenuMoved = false
+	MicroMenuContainer.centerX, MicroMenuContainer.centerY = 850, 30
 	MicroMenuContainer:ClearAllPoints()
-	MicroMenuContainer:SetPoint("CENTER", UIParent, "BOTTOMLEFT", menuX, menuY)
+	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
 end
 
 Test("in Edit Mode the block lets go of the micro menu: moving the menu leaves it where it was, and it keeps that spot", function()
@@ -1322,6 +1376,101 @@ Test("a block on a spot of its own stays there when the micro menu is selected a
 	MoveMicroMenu(1400, 300)
 	EditModeManagerFrame:ClearSelectedSystem()
 	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "its spot")
+end)
+
+-- Whether the client anchors a dragged bar by its old point or by another, the bar keeps only the
+-- point the game gave it, where the player dropped it.
+Test("a micro menu dropped in Edit Mode stays where the player dropped it, by the one point the game gave it", function()
+	for _, point in ipairs({ "BOTTOM", "TOPLEFT" }) do
+		NewGame()
+		Login()
+		game.callbacks["EditMode.Enter"]()
+		LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+		EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+		EditModeDrag(MicroMenuContainer, point, 400, 300)
+		Equal(MicroMenuContainer:GetNumPoints(), 1, point .. ": points after the drop")
+		Near(OffsetX(MicroMenuContainer, point), 400, point .. ": where it was dropped")
+		Near(OffsetX(BagsBar), BAGS_JOIN_X, point .. ": the bags bar joins the menu again")
+		-- The player clicks something else: the block keeps its spot and everything is laid out again.
+		LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 400, 300)
+		EditModeManagerFrame:ClearSelectedSystem()
+		Equal(MicroMenuContainer:GetNumPoints(), 1, point .. ": points later")
+		Near(OffsetX(MicroMenuContainer, point), 400, point .. ": still there")
+	end
+end)
+
+Test("while the player drags one of the game's bars in Edit Mode, the addon leaves it in their hand", function()
+	for _, point in ipairs({ "BOTTOM", "TOPLEFT" }) do
+		NewGame()
+		Login()
+		game.callbacks["EditMode.Enter"]()
+		LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+		EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+		EditModeDrag(MicroMenuContainer, point, 400, 300)
+		-- Picked up again right away, while the game lays out the bars above the row (a target
+		-- change does), so the addon lays out again.
+		EditModeDrag(MicroMenuContainer, point, 600, 300, function()
+			game.LayOutBottomBars()
+			Equal(MicroMenuContainer:GetNumPoints(), 1, point .. ": micro menu points in the hand")
+			Near(OffsetX(MicroMenuContainer, point), 600, point .. ": micro menu in the hand")
+		end)
+		Near(OffsetX(MicroMenuContainer, point), 600, point .. ": micro menu where it was dropped")
+		-- The action bar in the hand hangs off nothing, like a row of its own. Meanwhile Edit Mode
+		-- places the bags bar again.
+		NewGame()
+		Login()
+		game.callbacks["EditMode.Enter"]()
+		EditModeManagerFrame:SelectSystem(MainActionBar)
+		EditModeDrag(MainActionBar, point, 300, 200, function()
+			BagsBar:ClearAllPoints()
+			BagsBar:SetPoint(BAGS_ANCHOR_POINT, MicroMenuContainer, BAGS_ANCHOR_RELATIVE_POINT, BAGS_JOIN_X, BAGS_JOIN_Y)
+			Equal(MainActionBar:GetNumPoints(), 1, point .. ": action bar points in the hand")
+			Near(OffsetX(MainActionBar, point), 300, point .. ": action bar in the hand")
+		end)
+		Equal(MainActionBar:GetNumPoints(), 1, point .. ": action bar points after the drop")
+		Near(OffsetX(MainActionBar, point), 300, point .. ": action bar where it was dropped")
+	end
+end)
+
+Test("a bags bar dragged away in Edit Mode stays where it was dropped", function()
+	for _, point in ipairs({ "BOTTOMLEFT", "TOPLEFT" }) do
+		NewGame()
+		Login()
+		game.callbacks["EditMode.Enter"]()
+		EditModeManagerFrame:SelectSystem(BagsBar)
+		EditModeDrag(BagsBar, point, 1200, 400)
+		Equal(BagsBar:GetNumPoints(), 1, point .. ": points")
+		Near(OffsetX(BagsBar, point), 1200, point .. ": where it was dropped")
+	end
+end)
+
+Test("Revert All Changes, or leaving Edit Mode without saving, puts the block back in the row with the micro menu", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	RevertAllChanges()
+	Equal(AmILaggingDB.spot, nil, "spot")
+	local point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar joins the block")
+	-- Also when the micro menu was let go first.
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	EditModeManagerFrame:ClearSelectedSystem()
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
+	RevertAllChanges()
+	Equal(AmILaggingDB.spot, nil, "spot after a later revert")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row after a later revert")
+	-- Once Edit Mode closes, the kept spot is the player's: a layout that puts the micro menu back
+	-- later leaves the block on it.
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	game.callbacks["EditMode.Exit"]()
+	RevertAllChanges()
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "spot kept after Edit Mode closed")
 end)
 
 local function PressKey(key)
@@ -1619,12 +1768,29 @@ Test("if making room fails, the bar goes back to the game's and it says so once"
 	Equal(#game.chat, 1, "chat lines after")
 end)
 
-Test("if even putting the bar back fails, the addon leaves the bar alone", function()
-	NewGame({ before = function() game.moveErrors = 2 end })
+Test("if a move fails after the row made room, the bar still goes back to the game's", function()
+	NewGame()
 	Login()
+	game.moveErrors = 1
+	MicroMenu:Hide()
+	Equal(#game.errors, 1, "errors reported")
+	Equal(#game.chat, 1, "chat lines")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
+	for _, name in ipairs({ "MultiBarBottomRight", "MultiBarBottomLeft", "StanceBar", "PetActionBar", "PossessActionBar", "MainMenuBarVehicleLeaveButton" }) do
+		Near(OffsetX(_G[name]), 0, name)
+	end
+end)
+
+Test("if even putting the bar back fails, the addon leaves the bar alone", function()
+	NewGame()
+	Login()
+	-- The game starts failing after the row made room: the next move fails, and so does putting
+	-- the bar back.
+	game.moveErrors = 2
+	MicroMenu:Hide()
 	Equal(#game.errors, 2, "errors reported")
 	Equal(#game.chat, 1, "chat lines")
-	MicroMenu:Hide()
 	MicroMenu:Show()
 	MainStatusTrackingBarContainer:SetWidth(600)
 	Equal(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar")

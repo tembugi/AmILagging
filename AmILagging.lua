@@ -348,6 +348,11 @@ local lastPlacement -- where the last layout put the block
 -- While the micro menu is selected in Edit Mode: where the block and the micro menu stood when it
 -- was selected (their centers in UIParent units), so the block stays put while the menu moves.
 local menuHold
+-- The spot the block kept when the micro menu moved away from it (see ReleaseBlock). Until Edit
+-- Mode closes, it is given up if the micro menu goes back where Blizzard's layout puts it (Revert
+-- All Changes, leaving without saving, the menu's Reset To Default Position): the block goes back
+-- in the row, rather than standing where the bags bar comes back.
+local keptSpot
 local rowMovers = {} -- frame -> mover, for the frames moved so far
 local xpBars = {} -- XP bar container -> its stretch
 local Layout, ShowEditBox
@@ -382,6 +387,13 @@ end
 -- position and nothing else, and never reach the addon's own hooks.
 -- A frame can have two points, set one after the other (Edit Mode keeps a second one when a
 -- frame is snapped to two others), so each point is remembered and moved on its own.
+-- A bar the player drags in Edit Mode is moved by the client itself, which replaces its points
+-- without SetPoint, so the hooks don't see it. A bar in the player's hand is left alone, and before
+-- each move the remembered points are checked against the frame's own (see Reconcile).
+local function SameOffset(a, b)
+	return math.abs(a - b) < 0.01
+end
+
 local function CreateMover(frame)
 	local setPoint = frame.SetPointBase or frame.SetPoint
 	local mover = { points = {}, applied = {} } -- point -> Blizzard's anchor, and offset added
@@ -406,13 +418,36 @@ local function CreateMover(frame)
 		end
 	end
 
+	-- Takes the frame's points as they are now: a point still where Blizzard or the addon last put
+	-- it keeps what was remembered; any other point is Blizzard's, without the addon's offset; a
+	-- remembered point the frame no longer has is forgotten, so it is never put back.
+	function mover:Reconcile()
+		local points, applied = {}, {}
+		for i = 1, frame:GetNumPoints() do
+			local name, relativeTo, relativePoint, x, y = frame:GetPoint(i)
+			local anchor = self.points[name]
+			if anchor and anchor[1] == relativeTo and anchor[2] == relativePoint
+				and SameOffset(x, anchor[3] + self.applied[name]) and SameOffset(y, anchor[4]) then
+				points[name], applied[name] = anchor, self.applied[name]
+			else
+				points[name], applied[name] = { relativeTo, relativePoint, x, y }, 0
+			end
+		end
+		self.points, self.applied = points, applied
+	end
+
 	-- Only touches points whose offset has to change, so frames that stay where Blizzard put
-	-- them are left alone.
+	-- them are left alone. Edit Mode marks a bar in the player's hand (isDragging).
 	function mover:SetExtraX(extraX)
+		if frame.isDragging then
+			return
+		end
+		self:Reconcile()
 		for point, anchor in pairs(self.points) do
 			if self.applied[point] ~= extraX then
-				self.applied[point] = extraX
+				-- Remembered only once the move worked, so a failed move leaves nothing to put back.
 				setPoint(frame, point, anchor[1], anchor[2], anchor[3] + extraX, anchor[4])
+				self.applied[point] = extraX
 			end
 		end
 	end
@@ -1112,6 +1147,7 @@ local function ReleaseBlock()
 	local moved = menuX and (math.abs(menuX - hold.menuX) > 0.5 or math.abs(menuY - hold.menuY) > 0.5)
 	if moved and not InDefaultPosition(MicroMenuContainer) and not saved.spot then
 		saved.spot = { x = hold.x, y = hold.y }
+		keptSpot = saved.spot
 	end
 	Layout()
 	UpdateDialog()
@@ -1172,6 +1208,10 @@ function Layout()
 	-- While the player drags the block, it stays in their hand; dropping it lays everything out.
 	if dragging then
 		return
+	end
+	if keptSpot and saved.spot == keptSpot and InDefaultPosition(MicroMenuContainer) then
+		saved.spot, keptSpot = nil, nil
+		UpdateDialog()
 	end
 
 	local placement = Placement()
@@ -1261,6 +1301,7 @@ local function OnEditModeExit()
 	ReleaseBlock()
 	Deselect()
 	editModeStart = nil
+	keptSpot = nil
 	editModeOpen = false
 	MeasureArt()
 	DressBlock()
@@ -1323,6 +1364,12 @@ local function SetUp(events)
 					ReleaseBlock()
 				end)
 			end)
+		end
+		-- Edit Mode sets the new point of a bar the player dropped or moved with the arrow keys, and
+		-- only then marks the bar as moved from its default position. The addon saw the point while
+		-- the bar still counted as Blizzard's, so it lays out again once Edit Mode is done.
+		if EditModeManagerFrame and EditModeManagerFrame.OnSystemPositionChange then
+			hooksecurefunc(EditModeManagerFrame, "OnSystemPositionChange", Relayout)
 		end
 		if MainStatusTrackingBarContainer and CanStretch(MainStatusTrackingBarContainer) then
 			XPBarStateFor(MainStatusTrackingBarContainer)

@@ -5,3 +5,4 @@
 - In Edit Mode, click it to change its size or put it back in its place.
 - Moving the menu buttons in Edit Mode no longer takes the block along.
 - If you moved your action bar away from the menu buttons, it is no longer nudged sideways.
+- Bars you drag in Edit Mode now stay exactly where you drop them.
