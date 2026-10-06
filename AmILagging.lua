@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.4.1"
+local VERSION = "1.4.2"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -960,7 +960,17 @@ local function CreateDialog()
 	end
 end
 
+-- Only one thing is selected in Edit Mode at a time, as in the game: selecting the block first
+-- clears Edit Mode's own selection, which closes the game's settings dialog. Called from outside
+-- Blizzard's code out of combat, ClearSelectedSystem runs its clearing through a secure delegate,
+-- so it stays Blizzard's own (Edit Mode can't be open in combat).
 local function Select()
+	if selected then
+		return
+	end
+	if EditModeManagerFrame and EditModeManagerFrame.ClearSelectedSystem and not InCombatLockdown() then
+		EditModeManagerFrame:ClearSelectedSystem()
+	end
 	if not dialog then
 		CreateDialog()
 	end
@@ -1144,15 +1154,19 @@ local function SetUp(events)
 		if BagsBar then
 			RowMoverFor(BagsBar)
 		end
-		-- Selecting one of the game's bars in Edit Mode deselects the block, as it does the others.
-		if EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
-			hooksecurefunc(EditModeManagerFrame, "SelectSystem", function()
-				Guarded(function()
-					if selected then
-						Deselect()
-					end
-				end)
+		-- Selecting one of the game's bars in Edit Mode deselects the block, as it does the others,
+		-- and so does Edit Mode clearing its selection (its dialog closed, a layout change).
+		local function DeselectBlock()
+			Guarded(function()
+				if selected then
+					Deselect()
+				end
 			end)
+		end
+		for _, method in ipairs({ "SelectSystem", "ClearSelectedSystem" }) do
+			if EditModeManagerFrame and EditModeManagerFrame[method] then
+				hooksecurefunc(EditModeManagerFrame, method, DeselectBlock)
+			end
 		end
 		if MainStatusTrackingBarContainer and CanStretch(MainStatusTrackingBarContainer) then
 			XPBarStateFor(MainStatusTrackingBarContainer)

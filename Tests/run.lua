@@ -616,6 +616,10 @@ local function NewGame(options)
 	function EditModeManagerFrame:SelectSystem(systemFrame)
 		game.selectedSystem = systemFrame
 	end
+	-- Unselects the game's bars and closes its settings dialog (EditModeManager.lua).
+	function EditModeManagerFrame:ClearSelectedSystem()
+		game.selectedSystem = nil
+	end
 	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
 		return { interfaceStyle = C_InputInterfaceStyle.GetCurrentStyle() }
@@ -1150,6 +1154,31 @@ Test("selecting one of the game's bars, or leaving Edit Mode, closes the block's
 	ClickBlock()
 	game.callbacks["EditMode.Exit"]()
 	Equal(SettingsDialog().frame:IsShown(), false, "settings after Edit Mode")
+end)
+
+Test("selecting the block clears the game's selection, so only one thing is selected", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	EditModeManagerFrame:SelectSystem(BagsBar)
+	ClickBlock()
+	Equal(game.selectedSystem, nil, "the game's selection")
+	Equal(SettingsDialog().frame:IsShown(), true, "the block's settings")
+	Equal(game.editBox.kit, "editmode-actionbar-selected", "the block selected")
+	-- Clicking it again keeps it selected.
+	ClickBlock()
+	Equal(SettingsDialog().frame:IsShown(), true, "the block's settings after another click")
+	Equal(game.editBox.kit, "editmode-actionbar-selected", "still selected")
+end)
+
+Test("when the game clears its selection, the block is deselected too", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	EditModeManagerFrame:ClearSelectedSystem()
+	Equal(SettingsDialog().frame:IsShown(), false, "the block's settings")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box")
 end)
 
 Test("the saved size is kept only inside the slider's range and when it isn't the default", function()
