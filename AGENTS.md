@@ -47,7 +47,7 @@ The addon makes room for itself, and removing it leaves no trace.
 - While Edit Mode is open the moves and stretch stay on, so the block keeps its place in the row there (the user's choice, 2026-10-06: taking them off made the block pop out to a spot that was hard to grab). Edit Mode still saves only what the player moves: a bar they drag is saved where they drop it, and the moves only apply to bars still in Blizzard's arrangement (a dragged bar leaves it). On leaving Edit Mode the art is measured again.
 - In combat every change waits for `PLAYER_REGEN_ENABLED`: protected frames can't be moved then.
 - Taint: the block is in no Blizzard list, so Blizzard's bags bar layout runs clean. The moves still run from the addon's hooks (all wait for the end of combat).
-- Taint logging (`taintLog`) is the check for taint: level 1 for blocked actions, level 4 to see every value the addon taints (the user runs it; read `<Game>/Logs/taint.log`).
+- The taint check runs at level 4 (shared rules). After the `UpdateDividers` fix (2026-10-06) the log showed the addon tainting only its own objects (its colors, its Edit Mode box). What stays with taint logging on is the client's wrapper bug: the XP bar's `SetPoint` wrapper at EditModeManager.lua:710 failed while calling the addon's hook, four times during `/reload` and once when Edit Mode opened.
 
 ## Floating (the user's design, 2026-10-06)
 
