@@ -58,6 +58,8 @@ local UI_SCALE = 0.9
 local BAGS_SCALE = 0.8
 local STACKED_BAR_SCALE = 1.25
 local XP_BAR_WIDTH = 571
+-- ASSUMED: the number of tick-mark segments on the XP bar.
+local XP_BAR_SEGMENTS = 20
 
 --------------------------------------------------------------------------------
 -- The stand-in
@@ -280,9 +282,20 @@ local function NewRegion(parent)
 		self.events[event] = nil
 	end
 	function region:EnableMouse() end
+	-- The child frames, without textures and font strings, as the game's GetChildren.
+	function region:GetChildren()
+		local frames = {}
+		for _, child in ipairs(self.children) do
+			if not child.isRegion then
+				frames[#frames + 1] = child
+			end
+		end
+		return unpack(frames)
+	end
 
 	function region:CreateTexture()
 		local texture = NewRegion(self)
+		texture.isRegion = true
 		function texture:SetColorTexture() end
 		function texture:SetAtlas(atlas)
 			self.atlas = atlas
@@ -305,6 +318,7 @@ local function NewRegion(parent)
 
 	function region:CreateFontString()
 		local text = NewRegion(self)
+		text.isRegion = true
 		text.setTexts, text.setFonts = 0, 0
 		function text:SetFont(font, size, flags)
 			self.font = { font, size, flags }
@@ -372,13 +386,29 @@ local function NewXPBarContainer()
 	function container:ResizeContainerBars()
 		self.resized = self.resized + 1
 	end
-	function container:UpdateDividers(segments)
-		self.dividers = segments
+	-- Blizzard's UpdateDividers hands the tick marks back to its pool and takes them out again; the
+	-- pool's counters are secure values, so a call from the addon taints them (taint log,
+	-- 2026-10-06). The stand-in counts the calls.
+	container.dividerUpdates = 0
+	function container:UpdateDividers()
+		self.dividerUpdates = self.dividerUpdates + 1
 	end
-	-- ASSUMED: the number of tick-mark segments; the addon only passes it on.
 	function container:GetExpectedSegments()
-		return 20
+		return XP_BAR_SEGMENTS
 	end
+	-- What UpdateDividers left: the tick marks, frames hung by their left on the container's left,
+	-- evenly spread; a released one, hidden without points (Pool_HideAndClearAnchors); and a bar,
+	-- hung by its bottom left, 1 right and STATUS_BAR_SIZE_ADJUSTMENT - 1 up (Camelot: 3)
+	-- (StatusTrackingManagerOverrides.lua). The pool hands marks out last released first, so the
+	-- frames' order says nothing about their place: here they are made right to left.
+	container.dividerFrames = {}
+	for i = XP_BAR_SEGMENTS - 1, 1, -1 do
+		local divider = NewRegion(container)
+		divider:SetPoint("LEFT", container, "LEFT", XP_BAR_WIDTH / XP_BAR_SEGMENTS * i, 0)
+		container.dividerFrames[i] = divider
+	end
+	NewRegion(container).shown = false
+	NewRegion(container):SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 1, 2)
 	return container
 end
 
@@ -1002,7 +1032,11 @@ Test("the row grows evenly: the row moves left by half, the bars above move righ
 	Near(OffsetX(MultiBarBottomLeft), GROWTH / 2 / STACKED_BAR_SCALE, "stacked bar")
 	Near(OffsetX(MainMenuBarVehicleLeaveButton), GROWTH / 2 / STACKED_BAR_SCALE, "vehicle exit button")
 	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar")
-	Equal(MainStatusTrackingBarContainer.resized > 0 and MainStatusTrackingBarContainer.dividers, 20, "XP bar fitted with Blizzard's methods")
+	Equal(MainStatusTrackingBarContainer.resized > 0, true, "XP bar's bars fitted with Blizzard's method")
+	Equal(MainStatusTrackingBarContainer.dividerUpdates, 0, "Blizzard's UpdateDividers never called: it taints its pool")
+	for i, divider in ipairs(MainStatusTrackingBarContainer.dividerFrames) do
+		Near(OffsetX(divider, "LEFT"), (XP_BAR_WIDTH + GROWTH) / XP_BAR_SEGMENTS * i, "tick mark " .. i)
+	end
 	Near(OffsetX(MainStatusTrackingBarContainer), 0, "XP bar stays on the left end")
 end)
 
@@ -1717,6 +1751,10 @@ Test("by a moved micro menu, dropping the block by it or Reset To Default Positi
 	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar makes room")
 	DragTo(300, 400)
 	Near(OffsetX(BagsBar), BAGS_JOIN_X, "the bags bar back where Blizzard put it")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar back to its width")
+	for i, divider in ipairs(MainStatusTrackingBarContainer.dividerFrames) do
+		Near(OffsetX(divider, "LEFT"), XP_BAR_WIDTH / XP_BAR_SEGMENTS * i, "tick mark " .. i .. " back")
+	end
 	ClickBlock()
 	SettingsDialog().reset.onClick()
 	Equal(AmILaggingDB.spot, nil, "spot after Reset To Default Position")

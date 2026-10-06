@@ -537,12 +537,36 @@ local function IsStackedOnRow(bar)
 	return false
 end
 
--- The XP bars stretch by the row's growth to reach its right end again: Blizzard's own methods,
--- the ones its Size setting uses, fit the bars and tick marks inside a wider container. The
--- other stacked bars are fixed buttons and cannot stretch, so they move right by half the
--- growth to stay centered over the row.
+-- The XP bars stretch by the row's growth to reach its right end again: Blizzard's own method, the
+-- one its Size setting uses, fits the bars inside a wider container, and the tick marks between the
+-- segments are spread evenly again. The other stacked bars are fixed buttons and cannot stretch, so
+-- they move right by half the growth to stay centered over the row.
 local function CanStretch(bar)
 	return bar.ResizeContainerBars and bar.UpdateDividers and bar.GetExpectedSegments
+end
+
+-- Blizzard places the tick marks with UpdateDividers, which the addon must never call: it hands the
+-- marks back to Blizzard's pool and takes them out again, and the pool counts them in secure values.
+-- Called from an addon, those values become tainted, and Blizzard's own code reading them runs
+-- tainted (the taint log, 2026-10-06). So the addon moves the marks Blizzard placed, with the frames'
+-- own methods: the container's child frames hung by their left on its left (its bars hang by their
+-- bottom left, and the pool clears the points of marks it holds back), spread evenly over the new
+-- width.
+local function SpreadDividers(container)
+	local dividers = {}
+	for _, child in ipairs({ container:GetChildren() }) do
+		local point, relativeTo, relativePoint, x = child:GetPoint(1)
+		if point == "LEFT" and relativeTo == container and relativePoint == "LEFT" then
+			dividers[#dividers + 1] = { frame = child, x = x }
+		end
+	end
+	table.sort(dividers, function(a, b)
+		return a.x < b.x
+	end)
+	local segmentWidth = container:GetWidth() / (#dividers + 1)
+	for i, divider in ipairs(dividers) do
+		divider.frame:SetPoint("LEFT", container, "LEFT", segmentWidth * i, 0)
+	end
 end
 
 local function FitXPBar(container, state)
@@ -553,7 +577,7 @@ local function FitXPBar(container, state)
 	state.fitting = true
 	container:SetWidth(width)
 	container:ResizeContainerBars()
-	container:UpdateDividers(container:GetExpectedSegments())
+	SpreadDividers(container)
 	state.fitting = false
 end
 
