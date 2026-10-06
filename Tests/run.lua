@@ -290,6 +290,9 @@ local function NewRegion(parent)
 		function texture:SetTexture(file)
 			self.file = file
 		end
+		function texture:GetTexture()
+			return self.file
+		end
 		self.textures[#self.textures + 1] = texture
 		return texture
 	end
@@ -310,6 +313,12 @@ local function NewRegion(parent)
 		end
 		function text:SetJustifyH(justify)
 			self.justify = justify
+		end
+		function text:SetFontObject(fontObject)
+			self.fontObject = fontObject
+		end
+		function text:GetFontObject()
+			return self.fontObject
 		end
 		-- ASSUMED: one line of text is 16 high; the addon only sizes its dialog with it.
 		function text:GetStringHeight()
@@ -557,6 +566,9 @@ local function NewGame(options)
 	MicroMenu.BorderArt:SetPoint("BOTTOMRIGHT", MicroMenu, "BOTTOMRIGHT", MICRO_MENU_REACH, -MICRO_MENU_REACH)
 	MainActionBar = EditModeSystem(UIParent)
 	MainActionBar:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "BOTTOMLEFT", -4.5, -4)
+	function MainActionBar:IsInDefaultPosition()
+		return not game.actionBarMoved
+	end
 	BagsBar = EditModeSystem(UIParent)
 	BagsBar.scale = BAGS_SCALE
 	BagsBar.level = 52
@@ -613,6 +625,26 @@ local function NewGame(options)
 	function EditModeManagerFrame:IsEditModeActive()
 		return game.editMode
 	end
+	-- The game's settings dialog for its bars (EditModeDialogs.xml), hidden. ASSUMED: a little off
+	-- Blizzard's values, so the tests see the block's dialog read them from it.
+	local gameDialog = NewRegion(UIParent)
+	gameDialog.shown = false
+	gameDialog:SetFrameStrata("DIALOG")
+	gameDialog:SetFrameLevel(201)
+	gameDialog.widthPadding, gameDialog.heightPadding = 42, 44
+	gameDialog.Title = gameDialog:CreateFontString()
+	gameDialog.Title:SetFontObject("GameFontHighlightLarge")
+	gameDialog.Title:SetPoint("TOP", gameDialog, "TOP", 0, -16)
+	gameDialog.Settings = NewRegion(gameDialog)
+	gameDialog.Settings:SetPoint("TOP", gameDialog.Title, "BOTTOM", 0, -13)
+	gameDialog.Buttons = NewRegion(gameDialog)
+	gameDialog.Buttons.spacing = 3
+	gameDialog.Buttons.RevertChangesButton = NewRegion(gameDialog.Buttons)
+	gameDialog.Buttons.RevertChangesButton:SetSize(181, 29)
+	gameDialog.Buttons.Divider = gameDialog.Buttons:CreateTexture()
+	gameDialog.Buttons.Divider:SetTexture("Interface\\FriendsFrame\\UI-FriendsFrame-OnlineDivider")
+	gameDialog.Buttons.Divider:SetSize(331, 17)
+	EditModeSystemSettingsDialog = gameDialog
 	function EditModeManagerFrame:SelectSystem(systemFrame)
 		game.selectedSystem = systemFrame
 	end
@@ -936,6 +968,24 @@ Test("a bar the player moved elsewhere is left alone", function()
 	Near(OffsetX(MultiBarBottomLeft), GROWTH / 2 / STACKED_BAR_SCALE, "stacked bar")
 end)
 
+-- The player moved the action bar away from the row in Edit Mode and left the micro menu where
+-- it was: the row is the micro menu, the block and the bags. The action bar and the bars Blizzard
+-- stacks on it are no longer part of it.
+Test("an action bar the player moved away is left alone, and so are the bars stacked on it", function()
+	NewGame({ before = function()
+		game.actionBarMoved = true
+		MainActionBar:ClearAllPoints()
+		MainActionBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 10, 200)
+	end })
+	Login()
+	Equal(OffsetX(MainActionBar), 10, "action bar")
+	Near(OffsetX(MultiBarBottomLeft), 0, "bar stacked on the action bar")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar stacked on the action bar")
+	Equal((game.block:GetPoint(1)), "BOTTOMLEFT", "the block in the row")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the micro menu, still the row's root")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar")
+end)
+
 Test("a bags bar the player hung elsewhere stays there; the block joins the micro menu as the layout would", function()
 	NewGame()
 	Login()
@@ -1064,7 +1114,12 @@ Test("clicking the block in Edit Mode selects it and opens its settings where th
 	Equal(game.editBox.kit, "editmode-actionbar-selected", "the yellow box")
 	local dialog = SettingsDialog()
 	Equal(dialog.frame:IsShown(), true, "settings shown")
-	Equal(dialog.frame.strata, "DIALOG", "dialog strata")
+	-- Measured from the game's dialog.
+	Equal(dialog.frame.strata .. " " .. dialog.frame.level, "DIALOG 201", "the game's dialog strata and level")
+	Equal(dialog.revert:GetWidth() .. "x" .. dialog.revert:GetHeight(), "181x29", "the game's Revert Changes button size")
+	Equal(dialog.reset:GetHeight(), 29, "the game's button height")
+	Equal(dialog.frame:GetWidth(), 343 + 42, "the slider row and the game's padding")
+	Equal(dialog.frame:GetHeight(), 16 + 13 + 32 + 13 + 29 + 3 + 17 + 3 + 29 + 44, "the content and the game's padding")
 	local point, relativeTo, relativePoint, x, y = dialog.frame:GetPoint(1)
 	Equal(table.concat({ point, relativePoint, x, y }, " ") .. " " .. tostring(relativeTo == UIParent), "BOTTOMRIGHT BOTTOMRIGHT -250 200 true", "where the game opens the bags bar's")
 	Equal(table.concat({ dialog.slider.value, dialog.slider.minValue, dialog.slider.maxValue, dialog.slider.steps }, " "), "100 75 200 25", "the bags bar's Size slider")
@@ -1179,6 +1234,80 @@ Test("when the game clears its selection, the block is deselected too", function
 	EditModeManagerFrame:ClearSelectedSystem()
 	Equal(SettingsDialog().frame:IsShown(), false, "the block's settings")
 	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box")
+end)
+
+-- ASSUMED: where the client laid out the block and the micro menu (the stand-in doesn't lay frames
+-- out), as centers in each frame's own units.
+local function LaidOut(blockX, blockY, menuX, menuY)
+	game.block.centerX, game.block.centerY = blockX / BAGS_SCALE, blockY / BAGS_SCALE
+	MicroMenuContainer.centerX, MicroMenuContainer.centerY = menuX, menuY
+end
+
+-- The player drags the micro menu in Edit Mode: it leaves Blizzard's default spot and Edit Mode
+-- anchors it where it was dropped.
+local function MoveMicroMenu(menuX, menuY)
+	game.microMenuMoved = true
+	MicroMenuContainer.centerX, MicroMenuContainer.centerY = menuX, menuY
+	MicroMenuContainer:ClearAllPoints()
+	MicroMenuContainer:SetPoint("CENTER", UIParent, "BOTTOMLEFT", menuX, menuY)
+end
+
+Test("in Edit Mode the block lets go of the micro menu: moving the menu leaves it where it was, and it keeps that spot", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	local point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(point .. " " .. relativePoint .. " " .. tostring(relativeTo == UIParent), "CENTER BOTTOMLEFT true", "standing on its own while the menu is selected")
+	Near(x, ROW_CENTER_X / BAGS_SCALE, "where it stood, x")
+	Near(y, ROW_CENTER_Y / BAGS_SCALE, "where it stood, y")
+	MoveMicroMenu(1400, 300)
+	Equal((BlockAnchor()), "CENTER", "still where it stood after the menu moved")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "the bags bar joins the menu again")
+	EditModeManagerFrame:ClearSelectedSystem()
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot, x")
+	Near(AmILaggingDB.spot.y, ROW_CENTER_Y, "kept spot, y")
+	point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == UIParent), "CENTER true", "on its own spot")
+	game.callbacks["EditMode.Exit"]()
+	Equal((BlockAnchor()), "CENTER", "still there after Edit Mode")
+end)
+
+Test("leaving Edit Mode with the micro menu still selected keeps the block where it stood", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	game.callbacks["EditMode.Exit"]()
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
+	Equal((BlockAnchor()), "CENTER", "on its own spot")
+end)
+
+Test("selecting the micro menu without moving it leaves the block in its place", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	EditModeManagerFrame:SelectSystem(BagsBar)
+	Equal(AmILaggingDB.spot, nil, "spot")
+	local point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back by the micro menu")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the row still makes room")
+end)
+
+Test("a block on a spot of its own stays there when the micro menu is selected and moved", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 300, y = 400 } } end })
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(300, 400, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	EditModeManagerFrame:ClearSelectedSystem()
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "its spot")
 end)
 
 Test("the saved size is kept only inside the slider's range and when it isn't the default", function()

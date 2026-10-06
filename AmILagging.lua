@@ -344,6 +344,10 @@ end
 -- the layout says.
 local editModeOpen = false
 local layoutPending = false
+local lastPlacement -- where the last layout put the block
+-- While the micro menu is selected in Edit Mode: where the block and the micro menu stood when it
+-- was selected (their centers in UIParent units), so the block stays put while the menu moves.
+local menuHold
 local rowMovers = {} -- frame -> mover, for the frames moved so far
 local xpBars = {} -- XP bar container -> its stretch
 local Layout, ShowEditBox
@@ -454,13 +458,27 @@ local function RootOf(frame)
 	return current
 end
 
--- The row's roots: where the action bar's chain and the micro menu's chain start.
+-- Whether the player left a frame of Edit Mode's where Blizzard's layout puts it. Before Edit
+-- Mode has set up its systems it can't tell yet; the frame is then taken as Blizzard's.
+local function InDefaultPosition(frame)
+	if not frame.IsInDefaultPosition or (frame.IsInitialized and not frame:IsInitialized()) then
+		return true
+	end
+	return frame:IsInDefaultPosition() and true or false
+end
+
+-- The action bar is part of the row while it is where Blizzard's layout puts it. A player who
+-- moved it in Edit Mode took it out of the row, and the bars Blizzard stacks on it with it.
+local function ActionBarInRow()
+	return MainActionBar ~= nil and InDefaultPosition(MainActionBar)
+end
+
+-- The row's roots: where the micro menu's chain starts, and the action bar's while it is part of
+-- the row.
 local function RowRoots()
-	local roots = {}
-	for _, frame in ipairs({ MainActionBar, MicroMenuContainer }) do
-		if frame then
-			roots[RootOf(frame)] = true
-		end
+	local roots = { [RootOf(MicroMenuContainer)] = true }
+	if ActionBarInRow() then
+		roots[RootOf(MainActionBar)] = true
 	end
 	return roots
 end
@@ -577,15 +595,6 @@ local function InGamepadInterface()
 		and C_InputInterfaceStyle.GetCurrentStyle() == Enum.InputDeviceInterfaceType.Gamepad
 end
 
--- Whether the player left the micro menu where Blizzard's layout puts it. Before Edit Mode has
--- set up its systems it can't tell yet; the row is then taken as Blizzard's.
-local function MicroMenuInDefaultPosition()
-	local container = MicroMenuContainer
-	if not container.IsInDefaultPosition or (container.IsInitialized and not container:IsInitialized()) then
-		return true
-	end
-	return container:IsInDefaultPosition() and true or false
-end
 
 -- Where the block stands:
 -- "row": in the bottom row, right of the micro menu, while the micro menu is where Blizzard's
@@ -605,7 +614,7 @@ local function Placement()
 		return "spot"
 	elseif not OnScreen(MicroMenu or MicroMenuContainer) then
 		return "aboveXPBar"
-	elseif not MicroMenuInDefaultPosition() then
+	elseif not InDefaultPosition(MicroMenuContainer) then
 		return "besideMicroMenu"
 	end
 	return "row"
@@ -800,19 +809,60 @@ function ShowEditBox(shown)
 end
 
 -- The block's settings in Edit Mode, built like the game's settings dialog for its bars
--- (EditModeSystemSettingsDialog in EditModeDialogs.xml: its border, title, close button, slider
--- row and buttons, with the game's sizes and words), since the game's own dialog only serves
--- Edit Mode's systems. It opens where the game's opens for the bags bar (its settings dialog
--- anchor) and can be dragged.
+-- (EditModeSystemSettingsDialog: its border, title, close button, slider row and buttons, with
+-- the game's words), since the game's own dialog only serves Edit Mode's systems. It opens where
+-- the game's opens for the bags bar (its settings dialog anchor) and can be dragged.
 -- Size: the bags bar's Size slider, as a percentage of the bags bar's size; 100% is the default.
 -- Revert Changes: back to the spot and size the block had when Edit Mode opened, as the game's
 -- button reverts what changed since the layout was saved. Reset To Default Position: back to
 -- where the addon puts it (the row, or next to a moved micro menu); the size stays.
-local DIALOG_PADDING = 20
-local SETTING_ROW_WIDTH, SETTING_ROW_HEIGHT = 343, 32
-local SETTING_LABEL_WIDTH, SLIDER_WIDTH = 100, 200
-local REVERT_BUTTON_WIDTH, EXTRA_BUTTON_WIDTH, BUTTON_HEIGHT = 180, 330, 28
-local DIVIDER_HEIGHT, BUTTON_SPACING, SECTION_SPACING, TITLE_TOP = 16, 2, 12, 15
+-- Its measures are read from the game's dialog, which always exists (hidden until it opens for
+-- one of the game's bars): strata and level, padding, title font and place, spacing, the Revert
+-- Changes button and the divider. These are Blizzard's values from EditModeDialogs.xml, used if
+-- a piece is missing. The slider row and the wide button come from templates the game only makes
+-- for its own bars (EditModeSettingSliderTemplate, EditModeSystemSettingsDialogExtraButtonTemplate),
+-- so their sizes are Blizzard's values from those templates.
+local function GameDialogMeasures()
+	local measures = {
+		strata = "DIALOG", level = 200, widthPadding = 40, heightPadding = 40,
+		titleFont = "GameFontHighlightLarge", titleTop = 15, sectionSpacing = 12, buttonSpacing = 2,
+		revertWidth = 180, buttonHeight = 28,
+		dividerTexture = "Interface\\FriendsFrame\\UI-FriendsFrame-OnlineDivider", dividerWidth = 330, dividerHeight = 16,
+		rowWidth = 343, rowHeight = 32, labelWidth = 100, sliderWidth = 200, extraButtonWidth = 330,
+	}
+	local game = EditModeSystemSettingsDialog
+	if not game then
+		return measures
+	end
+	measures.strata, measures.level = game:GetFrameStrata(), game:GetFrameLevel()
+	measures.widthPadding = game.widthPadding or measures.widthPadding
+	measures.heightPadding = game.heightPadding or measures.heightPadding
+	if game.Title then
+		measures.titleFont = game.Title:GetFontObject() or measures.titleFont
+		local _, _, _, _, y = game.Title:GetPoint(1)
+		measures.titleTop = y and -y or measures.titleTop
+	end
+	if game.Settings then
+		local _, _, _, _, y = game.Settings:GetPoint(1)
+		measures.sectionSpacing = y and -y or measures.sectionSpacing
+	end
+	local buttons = game.Buttons
+	if buttons then
+		measures.buttonSpacing = buttons.spacing or measures.buttonSpacing
+		local revert = buttons.RevertChangesButton
+		if revert and revert:GetWidth() > 0 and revert:GetHeight() > 0 then
+			measures.revertWidth, measures.buttonHeight = revert:GetWidth(), revert:GetHeight()
+		end
+		local divider = buttons.Divider
+		if divider then
+			measures.dividerTexture = divider:GetTexture() or measures.dividerTexture
+			if divider:GetWidth() > 0 and divider:GetHeight() > 0 then
+				measures.dividerWidth, measures.dividerHeight = divider:GetWidth(), divider:GetHeight()
+			end
+		end
+	end
+	return measures
+end
 
 local dialog, sizeSlider, revertButton, resetButton
 local updatingDialog = false
@@ -887,9 +937,10 @@ local function Deselect()
 end
 
 local function CreateDialog()
+	local m = GameDialogMeasures()
 	dialog = CreateFrame("Frame", nil, UIParent)
-	dialog:SetFrameStrata("DIALOG")
-	dialog:SetFrameLevel(200)
+	dialog:SetFrameStrata(m.strata)
+	dialog:SetFrameLevel(m.level)
 	dialog:EnableMouse(true)
 	dialog:SetMovable(true)
 	dialog:SetClampedToScreen(true)
@@ -901,8 +952,9 @@ local function CreateDialog()
 	local border = CreateFrame("Frame", nil, dialog, "DialogBorderTranslucentTemplate")
 	border:SetAllPoints()
 
-	local title = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
-	title:SetPoint("TOP", 0, -TITLE_TOP)
+	local title = dialog:CreateFontString(nil, "ARTWORK")
+	title:SetFontObject(m.titleFont)
+	title:SetPoint("TOP", 0, -m.titleTop)
 	title:SetText(ADDON_TITLE)
 
 	local closeButton = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
@@ -912,15 +964,15 @@ local function CreateDialog()
 	end)
 
 	local row = CreateFrame("Frame", nil, dialog)
-	row:SetSize(SETTING_ROW_WIDTH, SETTING_ROW_HEIGHT)
-	row:SetPoint("TOP", title, "BOTTOM", 0, -SECTION_SPACING)
+	row:SetSize(m.rowWidth, m.rowHeight)
+	row:SetPoint("TOP", title, "BOTTOM", 0, -m.sectionSpacing)
 	local label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightMedium")
-	label:SetSize(SETTING_LABEL_WIDTH, SETTING_ROW_HEIGHT)
+	label:SetSize(m.labelWidth, m.rowHeight)
 	label:SetJustifyH("LEFT")
 	label:SetPoint("LEFT")
 	label:SetText(HUD_EDIT_MODE_SETTING_BAGS_SIZE)
 	sizeSlider = CreateFrame("Frame", nil, row, "MinimalSliderWithSteppersTemplate")
-	sizeSlider:SetSize(SLIDER_WIDTH, SETTING_ROW_HEIGHT)
+	sizeSlider:SetSize(m.sliderWidth, m.rowHeight)
 	sizeSlider:SetPoint("LEFT", label, "RIGHT", 5, 0)
 	sizeSlider.MinText:Hide()
 	sizeSlider.MaxText:Hide()
@@ -929,27 +981,28 @@ local function CreateDialog()
 	end, dialog)
 
 	revertButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate, UIButtonTemplate")
-	revertButton:SetSize(REVERT_BUTTON_WIDTH, BUTTON_HEIGHT)
-	revertButton:SetPoint("TOPLEFT", row, "BOTTOMLEFT", 0, -SECTION_SPACING)
+	revertButton:SetSize(m.revertWidth, m.buttonHeight)
+	revertButton:SetPoint("TOPLEFT", row, "BOTTOMLEFT", 0, -m.sectionSpacing)
 	revertButton:SetText(HUD_EDIT_MODE_REVERT_CHANGES)
 	revertButton:SetOnClickHandler(function()
 		Guarded(RevertChanges)
 	end)
 	local divider = dialog:CreateTexture(nil, "ARTWORK")
-	divider:SetTexture("Interface\\FriendsFrame\\UI-FriendsFrame-OnlineDivider")
-	divider:SetSize(EXTRA_BUTTON_WIDTH, DIVIDER_HEIGHT)
-	divider:SetPoint("TOPLEFT", revertButton, "BOTTOMLEFT", 0, -BUTTON_SPACING)
+	divider:SetTexture(m.dividerTexture)
+	divider:SetSize(m.dividerWidth, m.dividerHeight)
+	divider:SetPoint("TOPLEFT", revertButton, "BOTTOMLEFT", 0, -m.buttonSpacing)
 	resetButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate, UIButtonTemplate")
-	resetButton:SetSize(EXTRA_BUTTON_WIDTH, BUTTON_HEIGHT)
-	resetButton:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -BUTTON_SPACING)
+	resetButton:SetSize(m.extraButtonWidth, m.buttonHeight)
+	resetButton:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -m.buttonSpacing)
 	resetButton:SetText(HUD_EDIT_MODE_RESET_POSITION)
 	resetButton:SetOnClickHandler(function()
 		Guarded(ResetPosition)
 	end)
 
-	dialog:SetSize(SETTING_ROW_WIDTH + 2 * DIALOG_PADDING, TITLE_TOP + title:GetStringHeight() + SECTION_SPACING
-		+ SETTING_ROW_HEIGHT + SECTION_SPACING + BUTTON_HEIGHT + BUTTON_SPACING + DIVIDER_HEIGHT
-		+ BUTTON_SPACING + BUTTON_HEIGHT + DIALOG_PADDING)
+	-- Sized as the game's: its content and the padding (ResizeLayoutMixin).
+	local contentHeight = title:GetStringHeight() + m.sectionSpacing + m.rowHeight + m.sectionSpacing
+		+ m.buttonHeight + m.buttonSpacing + m.dividerHeight + m.buttonSpacing + m.buttonHeight
+	dialog:SetSize(math.max(m.rowWidth, m.extraButtonWidth) + m.widthPadding, contentHeight + m.heightPadding)
 	local anchor = BagsBar and BagsBar.GetSettingsDialogAnchor and BagsBar:GetSettingsDialogAnchor()
 	if anchor and anchor.Get then
 		local point, relativeTo, relativePoint, x, y = anchor:Get()
@@ -979,6 +1032,50 @@ local function Select()
 	UpdateDialog()
 	dialog:Show()
 	ShowEditBox(true)
+end
+
+-- A frame's center in UIParent units.
+local function CenterOf(frame)
+	local x, y = frame:GetCenter()
+	if not x then
+		return nil
+	end
+	local toUIParent = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+	return x * toUIParent, y * toUIParent
+end
+
+-- The block is its own thing: when the player selects the micro menu in Edit Mode (to drag it or
+-- move it with the arrow keys), the block lets go of it and stays where it stands on the screen.
+-- Only a block standing by the micro menu needs to; one on a spot of its own stands by the screen.
+local function HoldBlock()
+	if menuHold or (lastPlacement ~= "row" and lastPlacement ~= "besideMicroMenu") then
+		return
+	end
+	local x, y = CenterOf(block)
+	local menuX, menuY = CenterOf(MicroMenuContainer)
+	if not (x and menuX) then
+		return
+	end
+	menuHold = { x = x, y = y, menuX = menuX, menuY = menuY }
+	Layout()
+end
+
+-- When the micro menu is let go: if the player moved it away from where Blizzard's layout puts
+-- it, the block keeps the spot where it stood, as if the player had put it there; otherwise it
+-- goes back to standing by the micro menu.
+local function ReleaseBlock()
+	if not menuHold then
+		return
+	end
+	local hold = menuHold
+	menuHold = nil
+	local menuX, menuY = CenterOf(MicroMenuContainer)
+	local moved = menuX and (math.abs(menuX - hold.menuX) > 0.5 or math.abs(menuY - hold.menuY) > 0.5)
+	if moved and not InDefaultPosition(MicroMenuContainer) and not saved.spot then
+		saved.spot = { x = hold.x, y = hold.y }
+	end
+	Layout()
+	UpdateDialog()
 end
 
 -- Where the player drops the block: back in its place when dropped by the micro menu's right
@@ -1063,6 +1160,11 @@ function Layout()
 	elseif placement == "aboveXPBar" then
 		block:SetPoint("CENTER", UIParent, "BOTTOM", 0, InFrameUnits(AboveXPBarHeight(), block))
 	end
+	if menuHold and placement then
+		block:ClearAllPoints()
+		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(menuHold.x, block), InFrameUnits(menuHold.y, block))
+	end
+	lastPlacement = placement
 	block:SetShown(placement ~= nil)
 	ShowEditBox(editModeOpen and placement ~= nil and not InGamepadInterface())
 	if selected and not editBox:IsShown() then
@@ -1079,7 +1181,7 @@ function Layout()
 		for frame in pairs(RowRoots()) do
 			shifts[frame] = -rowGrowth / 2
 		end
-		for _, bar in ipairs(BottomBars()) do
+		for _, bar in ipairs(ActionBarInRow() and BottomBars() or {}) do
 			if IsStackedOnRow(bar) then
 				if CanStretch(bar) then
 					stretches[bar] = rowGrowth
@@ -1117,6 +1219,7 @@ local function OnEditModeExit()
 	if dragging then
 		OnDropped()
 	end
+	ReleaseBlock()
 	Deselect()
 	editModeStart = nil
 	editModeOpen = false
@@ -1155,18 +1258,32 @@ local function SetUp(events)
 			RowMoverFor(BagsBar)
 		end
 		-- Selecting one of the game's bars in Edit Mode deselects the block, as it does the others,
-		-- and so does Edit Mode clearing its selection (its dialog closed, a layout change).
-		local function DeselectBlock()
-			Guarded(function()
-				if selected then
-					Deselect()
-				end
+		-- and so does Edit Mode clearing its selection (its dialog closed, a layout change). Selecting
+		-- the micro menu makes the block let go of it; selecting anything else, or clearing the
+		-- selection, lets the micro menu go.
+		if EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
+			hooksecurefunc(EditModeManagerFrame, "SelectSystem", function(_, systemFrame)
+				Guarded(function()
+					if selected then
+						Deselect()
+					end
+					if systemFrame == MicroMenuContainer then
+						HoldBlock()
+					else
+						ReleaseBlock()
+					end
+				end)
 			end)
 		end
-		for _, method in ipairs({ "SelectSystem", "ClearSelectedSystem" }) do
-			if EditModeManagerFrame and EditModeManagerFrame[method] then
-				hooksecurefunc(EditModeManagerFrame, method, DeselectBlock)
-			end
+		if EditModeManagerFrame and EditModeManagerFrame.ClearSelectedSystem then
+			hooksecurefunc(EditModeManagerFrame, "ClearSelectedSystem", function()
+				Guarded(function()
+					if selected then
+						Deselect()
+					end
+					ReleaseBlock()
+				end)
+			end)
 		end
 		if MainStatusTrackingBarContainer and CanStretch(MainStatusTrackingBarContainer) then
 			XPBarStateFor(MainStatusTrackingBarContainer)
