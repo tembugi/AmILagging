@@ -15,7 +15,6 @@ The name is "Am I Lagging?" (title case; `ADDON_TITLE` in the code, also the too
 - World latency only on the face: it is the delay felt in combat and movement. Home latency (chat, mail, auction house) is in the tooltip. The user chose this after it was explained; readability at true size (45 px) was the reason.
 - A number wider than the slot less a 6.5 px margin each side (four-digit latency) shrinks to fit.
 - Only the latency number changes color, with the game menu button's rule: green up to 300 ms, yellow over 300, red over 600. FPS stays white. (The game menu button colors by the worse of home and world; the block colors the number it shows.)
-- For a look change, ask whether the user wants a mockup on the design canvas first; without one, build it straight away (the shared rule, 2026-10-05).
 - The numbers update once a second while the block is on screen; a number that didn't change is left alone.
 - Tooltip: the title, an empty line (as the game menu tooltip has), then the game's own framerate and latency lines, FPS first to match the face (`MAINMENUBAR_FPS_LABEL`, then `MAINMENUBAR_LATENCY_LABEL` with home and world), then `v<VERSION>`. Under the framerate, "Limited by: CPU" or "Limited by: GPU" from `IsCpuBound()`, as the game's Ctrl+R counter tells it; left out when it returns nil. The game can't report GPU load; this line is what it offers (the user chose it, 2026-10-01). The tooltip stays current while open through the block's `UpdateTooltip`, which the game's tooltip calls on its own timer, as the game menu tooltip stays current.
 
