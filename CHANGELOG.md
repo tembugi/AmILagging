@@ -1,5 +1,4 @@
-## v1.2.1
+## v1.3.0
 
-- The block has a small bar of its own between the menu buttons and the bags, so it stays when the bags bar is hidden.
-- With the gamepad interface on, the block shows between the gamepad buttons and the XP bar.
-- Updating over a version older than 1.1.3 now replaces an old file the game would keep reading.
+- If you move the menu buttons in Edit Mode, the block now stands on its own next to them.
+- In Edit Mode you can drag the block anywhere, and it stays there. Drag it back next to the menu buttons to put it back on the bar.

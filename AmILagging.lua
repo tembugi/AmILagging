@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.2.1"
+local VERSION = "1.3.0"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -27,6 +27,7 @@ local art = {
 	barFrame = "UI-HUD-ActionBar-Frame",
 	barReach = { left = 6, top = 6, right = 5, bottom = 5 },
 	microMenuReachRight = 8,
+	microMenuReachTop = 8,
 }
 
 -- The face: numbers only. FPS on top in white, world latency below in its color, both
@@ -61,6 +62,27 @@ local function SayProblem(problem, advice)
 	print(NORMAL_FONT_COLOR:WrapTextInColorCode(ADDON_TITLE) .. ": " .. RED_FONT_COLOR:WrapTextInColorCode(problem) .. " " .. advice)
 end
 
+-- The saved data, per account (AmILaggingDB): where the player put the block in Edit Mode, as
+-- the block's center in UIParent units from the screen's bottom left. Without a spot the block
+-- stands where the addon puts it. Nothing else is saved.
+local SAVE_FORMAT = 1
+local saved = { format = SAVE_FORMAT }
+
+local function IsFiniteNumber(value)
+	return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+-- Rebuilds the saved data on every load from the fields the addon uses and drops everything
+-- else: a spot stays only when both its numbers are finite.
+local function NormalizeSaved(data)
+	local result = { format = SAVE_FORMAT }
+	local spot = type(data) == "table" and data.spot
+	if type(spot) == "table" and IsFiniteNumber(spot.x) and IsFiniteNumber(spot.y) then
+		result.spot = { x = spot.x, y = spot.y }
+	end
+	return result
+end
+
 local function LatencyColor(latency)
 	if latency > MEDIUM_LATENCY then
 		return LATENCY_RED
@@ -72,6 +94,9 @@ end
 
 local block = CreateFrame("Frame", nil, UIParent)
 block:EnableMouse(true)
+-- The player can drag it in Edit Mode; it always stays on the screen, its frame art included.
+block:SetMovable(true)
+block:SetClampedToScreen(true)
 block:Hide()
 
 -- The bar frame around the slot, behind everything, as the bags bar draws its own.
@@ -250,7 +275,8 @@ local function MeasureArt()
 		art.barReach = ReachOf(BagsBar.BorderArt, art.barReach)
 	end
 	if MicroMenu and MicroMenu.BorderArt then
-		art.microMenuReachRight = ReachOf(MicroMenu.BorderArt, { right = art.microMenuReachRight }).right
+		local reach = ReachOf(MicroMenu.BorderArt, { right = art.microMenuReachRight, top = art.microMenuReachTop })
+		art.microMenuReachRight, art.microMenuReachTop = reach.right, reach.top
 	end
 	local bagSlot = CharacterReagentBag0Slot
 	if bagSlot then
@@ -267,6 +293,7 @@ local function DressBlock()
 	barFrame:ClearAllPoints()
 	barFrame:SetPoint("TOPLEFT", block, "TOPLEFT", -art.barReach.left, art.barReach.top)
 	barFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", art.barReach.right, -art.barReach.bottom)
+	block:SetClampRectInsets(-art.barReach.left, art.barReach.right, art.barReach.top, -art.barReach.bottom)
 	slotFrame:SetAtlas(art.slotFrame)
 	slotFrame:SetSize(art.slotFrameSize, art.slotFrameSize)
 	-- Lay the numbers out again for the new size.
@@ -284,17 +311,19 @@ end
 -- micro menu, but Edit Mode places bars in their default position on the screen itself. So
 -- the addon follows the anchors of the action bar and of the micro menu up to the frames that
 -- hang off the screen, and moves each of those once.
--- In the gamepad interface the game hides the bottom row; the block then stands on its own,
--- centered between the gamepad buttons and the XP bar, and nothing moves.
--- Nothing is saved: the layout is never written, Edit Mode anchors these frames again on
--- every layout change, and while Edit Mode is open the block is hidden and the moves are
--- taken off, so Edit Mode only ever sees and saves the layout's own positions. Without the
--- addon the bar is exactly as the layout says.
+-- The block stands in the row only while the micro menu is where Blizzard's layout puts it.
+-- When the player has customized the bar (moved the micro menu, or dragged the block somewhere
+-- in Edit Mode), the block floats on its own and nothing on the bar moves. In the gamepad
+-- interface the game hides the row; the block then stands on its own, centered between the
+-- gamepad buttons and the XP bar.
+-- The layout is never written: Edit Mode anchors these frames again on every layout change,
+-- and while Edit Mode is open the moves are taken off, so Edit Mode only ever sees and saves
+-- the layout's own positions. Without the addon the bar is exactly as the layout says.
 local editModeOpen = false
 local layoutPending = false
 local rowMovers = {} -- frame -> mover, for the frames moved so far
 local xpBars = {} -- XP bar container -> its stretch
-local Layout
+local Layout, ShowEditBox
 
 -- Making room runs inside the game's own code: right after Blizzard moves or resizes a frame.
 -- An error there must not break the code that called it, nor repeat on every move. The first
@@ -525,18 +554,41 @@ local function InGamepadInterface()
 		and C_InputInterfaceStyle.GetCurrentStyle() == Enum.InputDeviceInterfaceType.Gamepad
 end
 
--- Where the block stands: "row", right of the micro menu; "gamepad", on its own in the gamepad
--- interface, where the game hides the row; or nil, hidden: while Edit Mode is open, after a
--- failure, or when the micro menu isn't on screen (another addon replacing the game's bars).
+-- Whether the player left the micro menu where Blizzard's layout puts it. Before Edit Mode has
+-- set up its systems it can't tell yet; the row is then taken as Blizzard's.
+local function MicroMenuInDefaultPosition()
+	local container = MicroMenuContainer
+	if not container.IsInDefaultPosition or (container.IsInitialized and not container:IsInitialized()) then
+		return true
+	end
+	return container:IsInDefaultPosition() and true or false
+end
+
+-- Where the block stands:
+-- "row": in the bottom row, right of the micro menu, while the micro menu is where Blizzard's
+--   layout puts it; "aboveMicroMenu" instead while Edit Mode is open, since Edit Mode shows the
+--   row without room for the block;
+-- "spot": where the player put it in Edit Mode;
+-- "besideMicroMenu": next to a micro menu the player moved, on a side with room;
+-- "aboveXPBar": on its own, centered between the XP bar and the gamepad buttons: in the gamepad
+--   interface, where the game hides the row, or when the micro menu isn't on screen (another
+--   addon replacing the game's bars);
+-- nil: hidden, after a failure.
 local function Placement()
-	if editModeOpen or failure then
+	if failure then
 		return nil
 	elseif InGamepadInterface() then
-		return "gamepad"
-	elseif OnScreen(MicroMenu or MicroMenuContainer) then
-		return "row"
+		return "aboveXPBar"
+	elseif saved.spot then
+		return "spot"
+	elseif not OnScreen(MicroMenu or MicroMenuContainer) then
+		return "aboveXPBar"
+	elseif not MicroMenuInDefaultPosition() then
+		return "besideMicroMenu"
+	elseif editModeOpen then
+		return "aboveMicroMenu"
 	end
-	return nil
+	return "row"
 end
 
 -- How the bags bar hangs off the micro menu's right side, as Blizzard set it: its point, the
@@ -575,33 +627,175 @@ local function RowGrowth(x)
 	return (art.slotSize + x + art.barReach.right - microMenuReach) * scale / UIParent:GetEffectiveScale()
 end
 
--- A frame's top or bottom edge in UIParent units, from the screen's bottom.
+local EDGE_GETTERS = { top = "GetTop", bottom = "GetBottom", left = "GetLeft", right = "GetRight" }
+
+-- A frame's edge in UIParent units, from the screen's bottom left.
 local function EdgeOf(frame, edge)
-	local value = frame and (edge == "top" and frame:GetTop() or edge == "bottom" and frame:GetBottom())
+	local value = frame and frame[EDGE_GETTERS[edge]](frame)
 	if not value then
 		return nil
 	end
 	return value * frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
 end
 
--- In the gamepad interface the block stands centered between the gamepad buttons and the XP bar
--- (where the player marked it on the screen). Without the gamepad buttons' frame, it stands just
--- above the XP bar.
-local function GamepadCenterHeight()
+-- The block's own units to UIParent's.
+local function BlockToUIParent()
+	return block:GetEffectiveScale() / UIParent:GetEffectiveScale()
+end
+
+-- Centered between the XP bar and the gamepad buttons, where the user marked it on the gamepad
+-- interface. Without the gamepad buttons' frame, just above the XP bar.
+local function AboveXPBarHeight()
 	local xpBar = MainStatusTrackingBarContainer
 	local xpTop = xpBar and OnScreen(xpBar) and EdgeOf(xpBar, "top") or 0
 	local buttonsBottom = GamepadMainActionBarFrame and EdgeOf(GamepadMainActionBarFrame, "bottom")
 	if buttonsBottom and buttonsBottom > xpTop then
 		return (xpTop + buttonsBottom) / 2
 	end
-	local halfHeight = (art.slotSize / 2 + art.barReach.bottom) * block:GetEffectiveScale() / UIParent:GetEffectiveScale()
-	return xpTop + halfHeight
+	return xpTop + (art.slotSize / 2 + art.barReach.bottom) * BlockToUIParent()
 end
 
 -- Offsets and widths are in each frame's own scale.
 local function InFrameUnits(value, frame)
 	return value * UIParent:GetEffectiveScale() / frame:GetEffectiveScale()
 end
+
+-- A point's name with left and right swapped: the same join on the micro menu's other side.
+local function Mirrored(point)
+	return (point:gsub("LEFT", "#"):gsub("RIGHT", "LEFT"):gsub("#", "RIGHT"))
+end
+
+-- Whether a frame hangs off the micro menu's left or right side.
+local function HangsOffMicroMenu(frame, side)
+	if not frame then
+		return false
+	end
+	for i = 1, frame:GetNumPoints() do
+		local _, relativeTo, relativePoint = frame:GetPoint(i)
+		if relativeTo == MicroMenuContainer and relativePoint and relativePoint:find(side) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Just above the micro menu's right end, clear of its frame art.
+local function SetAboveMicroMenu()
+	block:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "TOPRIGHT", 0, art.microMenuReachTop + art.barReach.bottom)
+end
+
+-- Next to a micro menu the player moved, joined as on the row: on its right side when the bags
+-- bar doesn't hang there and the block fits on the screen, else on its left side when the action
+-- bar doesn't hang there and the block fits, else above it.
+local function SetBesideMicroMenu(point, relativePoint, x, y)
+	local toUIParent = BlockToUIParent()
+	local left, right = EdgeOf(MicroMenuContainer, "left"), EdgeOf(MicroMenuContainer, "right")
+	local rightEnd = right and right + (x + art.slotSize + art.barReach.right) * toUIParent
+	if not HangsOffMicroMenu(BagsBar, "RIGHT") and (not rightEnd or rightEnd <= UIParent:GetRight()) then
+		block:SetPoint(point, MicroMenuContainer, relativePoint, x, y)
+		return
+	end
+	local leftEnd = left and left - (x + art.slotSize + art.barReach.left) * toUIParent
+	if not HangsOffMicroMenu(MainActionBar, "LEFT") and (not leftEnd or leftEnd >= 0) then
+		block:SetPoint(Mirrored(point), MicroMenuContainer, Mirrored(relativePoint), -x, y)
+		return
+	end
+	SetAboveMicroMenu()
+end
+
+-- Where the block's center stands in the row, in UIParent units: joined to the micro menu's
+-- right side as JoinToMicroMenu says. Nil when the micro menu's edges aren't known yet.
+local function RowCenter()
+	local point, relativePoint, x, y = JoinToMicroMenu()
+	local left, right = EdgeOf(MicroMenuContainer, "left"), EdgeOf(MicroMenuContainer, "right")
+	local bottom, top = EdgeOf(MicroMenuContainer, "bottom"), EdgeOf(MicroMenuContainer, "top")
+	if not (left and right and bottom and top) then
+		return nil
+	end
+	-- Where a point's name sits along an axis: -1 (left or bottom), 0 (middle) or 1.
+	local function Along(name, low, high)
+		return name:find(low) and -1 or name:find(high) and 1 or 0
+	end
+	local toUIParent = BlockToUIParent()
+	local half = art.slotSize / 2 * toUIParent
+	local anchorX = (left + right) / 2 + Along(relativePoint, "LEFT", "RIGHT") * (right - left) / 2
+	local anchorY = (bottom + top) / 2 + Along(relativePoint, "BOTTOM", "TOP") * (top - bottom) / 2
+	return anchorX + x * toUIParent - Along(point, "LEFT", "RIGHT") * half,
+		anchorY + y * toUIParent - Along(point, "BOTTOM", "TOP") * half
+end
+
+-- In Edit Mode the block shows as Edit Mode shows the game's bars: a blue box that turns yellow
+-- while the player drags it, and its name in a tooltip on mouse over. Edit Mode keeps its box
+-- layout to itself (EditModeSystemSelectionLayout, local in EditModeSystemTemplates.lua), so its
+-- values are copied here; the art is the game's.
+local EDIT_MODE_BOX_LAYOUT = {
+	TopRightCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = 8, y = 8 },
+	TopLeftCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = -8, y = 8 },
+	BottomLeftCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = -8, y = -8 },
+	BottomRightCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = 8, y = -8 },
+	TopEdge = { atlas = "_%s-NineSlice-EdgeTop" },
+	BottomEdge = { atlas = "_%s-NineSlice-EdgeBottom" },
+	LeftEdge = { atlas = "!%s-NineSlice-EdgeLeft" },
+	RightEdge = { atlas = "!%s-NineSlice-EdgeRight" },
+	Center = { atlas = "%s-NineSlice-Center", x = -8, y = 8, x1 = 8, y1 = -8 },
+}
+local EDIT_MODE_HIGHLIGHT = "editmode-actionbar-highlight"
+local EDIT_MODE_SELECTED = "editmode-actionbar-selected"
+
+local editBox = CreateFrame("Frame", nil, block, "NineSliceCodeTemplate")
+editBox:SetAllPoints()
+editBox:EnableMouse(true)
+editBox:RegisterForDrag("LeftButton")
+editBox:Hide()
+local dragging = false
+
+function ShowEditBox(shown)
+	if shown then
+		editBox:SetFrameLevel(block:GetFrameLevel() + 10)
+		local kit = dragging and EDIT_MODE_SELECTED or EDIT_MODE_HIGHLIGHT
+		if kit ~= editBox.kit then
+			editBox.kit = kit
+			NineSliceUtil.ApplyLayout(editBox, EDIT_MODE_BOX_LAYOUT, kit)
+		end
+	end
+	editBox:SetShown(shown)
+end
+
+-- Where the player drops the block: back in its place when dropped by the micro menu's right
+-- end (within a slot's size of where it stands in the row), else on its own right there.
+local function OnDropped()
+	dragging = false
+	block:StopMovingOrSizing()
+	local x, y = block:GetCenter()
+	local toUIParent = BlockToUIParent()
+	x, y = x * toUIParent, y * toUIParent
+	local rowX, rowY = RowCenter()
+	local reach = art.slotSize * toUIParent
+	if rowX and math.abs(x - rowX) <= reach and math.abs(y - rowY) <= reach then
+		saved.spot = nil
+	else
+		saved.spot = { x = x, y = y }
+	end
+	Layout()
+end
+
+editBox:SetScript("OnDragStart", function()
+	Guarded(function()
+		GameTooltip_Hide()
+		dragging = true
+		ShowEditBox(true)
+		block:StartMoving()
+	end)
+end)
+editBox:SetScript("OnDragStop", function()
+	Guarded(OnDropped)
+end)
+editBox:SetScript("OnEnter", function(self)
+	GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+	GameTooltip:SetText(ADDON_TITLE)
+	GameTooltip:Show()
+end)
+editBox:SetScript("OnLeave", GameTooltip_Hide)
 
 function Layout()
 	-- Protected frames can't be moved in combat, so every change waits for the end of combat.
@@ -610,6 +804,10 @@ function Layout()
 		return
 	end
 	layoutPending = false
+	-- While the player drags the block, it stays in their hand; dropping it lays everything out.
+	if dragging then
+		return
+	end
 
 	local placement = Placement()
 	local rowGrowth, bagsShift = 0, 0
@@ -629,10 +827,17 @@ function Layout()
 		if bagsJoined then
 			bagsShift = rowGrowth
 		end
-	elseif placement == "gamepad" then
-		block:SetPoint("CENTER", UIParent, "BOTTOM", 0, InFrameUnits(GamepadCenterHeight(), block))
+	elseif placement == "besideMicroMenu" then
+		SetBesideMicroMenu(JoinToMicroMenu())
+	elseif placement == "aboveMicroMenu" then
+		SetAboveMicroMenu()
+	elseif placement == "spot" then
+		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(saved.spot.x, block), InFrameUnits(saved.spot.y, block))
+	elseif placement == "aboveXPBar" then
+		block:SetPoint("CENTER", UIParent, "BOTTOM", 0, InFrameUnits(AboveXPBarHeight(), block))
 	end
 	block:SetShown(placement ~= nil)
+	ShowEditBox(editModeOpen and placement ~= nil and not InGamepadInterface())
 
 	-- Grow evenly: each root of the row moves left by half, once; the bars stacked on it move
 	-- right by half or stretch by the whole growth, and the bags bar moves right by the whole
@@ -678,6 +883,9 @@ local function OnEditModeEnter()
 end
 
 local function OnEditModeExit()
+	if dragging then
+		OnDropped()
+	end
 	editModeOpen = false
 	MeasureArt()
 	DressBlock()
@@ -707,8 +915,9 @@ local function SetUp(events)
 	Guarded(function()
 		MeasureArt()
 		DressBlock()
-		-- The bags bar is watched from the start: where Blizzard hangs it decides where the block
-		-- stands. So is the XP bar, for the gamepad interface.
+		-- The micro menu and the bags bar are watched from the start: where Blizzard puts them
+		-- decides where the block stands. So is the XP bar, for the gamepad interface.
+		RowMoverFor(MicroMenuContainer)
 		if BagsBar then
 			RowMoverFor(BagsBar)
 		end
@@ -726,6 +935,8 @@ events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:SetScript("OnEvent", function(self, event)
 	if event == "PLAYER_LOGIN" then
 		self:UnregisterEvent("PLAYER_LOGIN")
+		saved = NormalizeSaved(AmILaggingDB)
+		AmILaggingDB = saved
 		-- The piece of the game the block can't do without: the micro menu it stands by.
 		if MicroMenuContainer and MicroMenuContainer.GetPoint then
 			SetUp(self)

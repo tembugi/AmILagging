@@ -48,6 +48,10 @@ local BAGS_JOIN_X, BAGS_JOIN_Y = 7, -4
 -- XP bar sits on the screen's bottom edge, as in the player's screenshot.
 local GAMEPAD_BUTTONS_BOTTOM = 110
 local XP_BAR_HEIGHT = 17
+-- ASSUMED: the screen and the micro menu's edges in UIParent units (the stand-in doesn't lay frames
+-- out; the micro menu has the same scale as UIParent).
+local SCREEN_WIDTH, SCREEN_HEIGHT = 1600, 900
+local MICRO_MENU_LEFT, MICRO_MENU_RIGHT, MICRO_MENU_BOTTOM, MICRO_MENU_TOP = 700, 1000, 10, 50
 -- ASSUMED: a player's UI scale and Edit Mode sizes, different from 1 so that mixing up units
 -- shows. Bars and the bags bar take their own scale on top of UIParent's.
 local UI_SCALE = 0.9
@@ -159,6 +163,37 @@ local function NewRegion(parent)
 	end
 	function region:GetBottom()
 		return self.bottom
+	end
+	function region:GetLeft()
+		return self.left
+	end
+	function region:GetRight()
+		return self.right
+	end
+	-- ASSUMED: where a dragged frame ends up is set by the test, as the client moves it under the
+	-- mouse.
+	function region:GetCenter()
+		return self.centerX, self.centerY
+	end
+	function region:SetMovable(movable)
+		self.movable = movable
+	end
+	function region:SetClampedToScreen(clamped)
+		self.clamped = clamped
+	end
+	function region:SetClampRectInsets(left, right, top, bottom)
+		self.clampInsets = { left, right, top, bottom }
+	end
+	function region:RegisterForDrag(button)
+		self.dragButton = button
+	end
+	-- The client refuses to move a frame that isn't movable.
+	function region:StartMoving()
+		assert(self.movable, "Frame is not movable")
+		self.moving = true
+	end
+	function region:StopMovingOrSizing()
+		self.moving = false
 	end
 	function region:SetFrameStrata(strata)
 		self.strata = strata
@@ -322,7 +357,9 @@ end
 -- then the addon loaded. Options change the game before the addon loads.
 local function NewGame(options)
 	options = options or {}
-	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0 }
+	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0, microMenuMoved = false }
+	-- The saved data as the game loads it before the addon's code runs; a test sets it in before().
+	AmILaggingDB = nil
 
 	print = function(...)
 		game.chat[#game.chat + 1] = table.concat({ ... }, " ")
@@ -390,6 +427,12 @@ local function NewGame(options)
 		game.tooltip[#game.tooltip + 1] = text
 	end
 	function GameTooltip:Show() end
+	function GameTooltip:SetOwner(owner)
+		game.tooltipOwner = owner
+	end
+	function GameTooltip:SetText(text)
+		game.tooltip = { text }
+	end
 	function GameTooltip_SetDefaultAnchor() end
 	function GameTooltip_SetTitle(_, text)
 		game.tooltip = { text }
@@ -412,14 +455,21 @@ local function NewGame(options)
 	function EventRegistry:RegisterCallback(event, func)
 		game.callbacks[event] = func
 	end
-	function CreateFrame(_, _, parent)
+	function CreateFrame(_, _, parent, template)
 		local frame = NewRegion(parent)
+		frame.template = template
 		game.frames[#game.frames + 1] = frame
 		return frame
+	end
+	-- Applies a nine-slice layout with an art kit (NineSlice.lua); the stand-in keeps the kit.
+	NineSliceUtil = {}
+	function NineSliceUtil.ApplyLayout(container, layout, kit)
+		container.layout, container.kit = layout, kit
 	end
 
 	UIParent = NewRegion(nil)
 	UIParent.scale = UI_SCALE
+	UIParent.left, UIParent.bottom, UIParent.right, UIParent.top = 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT
 
 	-- The bottom row: the micro menu hangs off the screen, the main action bar off the micro
 	-- menu, the bags bar off its right side (Camelot's preset layout constants).
@@ -427,6 +477,15 @@ local function NewGame(options)
 	BAGS_ANCHOR_OFFSET_X, BAGS_ANCHOR_OFFSET_Y = BAGS_JOIN_X, BAGS_JOIN_Y
 	MicroMenuContainer = EditModeSystem(UIParent)
 	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+	MicroMenuContainer.left, MicroMenuContainer.right = MICRO_MENU_LEFT, MICRO_MENU_RIGHT
+	MicroMenuContainer.bottom, MicroMenuContainer.top = MICRO_MENU_BOTTOM, MICRO_MENU_TOP
+	-- Edit Mode's own test: whether the player left the micro menu in its default spot.
+	function MicroMenuContainer:IsInitialized()
+		return true
+	end
+	function MicroMenuContainer:IsInDefaultPosition()
+		return not game.microMenuMoved
+	end
 	MicroMenu = NewRegion(MicroMenuContainer)
 	MicroMenu.BorderArt = MicroMenu:CreateTexture()
 	MicroMenu.BorderArt:SetPoint("TOPLEFT", MicroMenu, "TOPLEFT", -MICRO_MENU_REACH, MICRO_MENU_REACH)
@@ -509,6 +568,8 @@ local function NewGame(options)
 	game.block = game.frames[1]
 	game.fpsText, game.worldText = game.block.fontStrings[1], game.block.fontStrings[2]
 	game.barFrame, game.slotFrame, game.lineLeft = game.block.textures[1], game.block.textures[3], game.block.textures[4]
+	-- Edit Mode's box over the block, made right after it.
+	game.editBox = game.frames[2]
 	return game
 end
 
@@ -655,11 +716,11 @@ Test("no updates while the block is hidden", function()
 	NewGame()
 	Login()
 	local texts = game.fpsText.setTexts
-	MicroMenu:Hide()
+	UIParent:Hide()
 	game.fps = 30
 	Tick()
 	Equal(game.fpsText.setTexts, texts, "updated while hidden")
-	MicroMenu:Show()
+	UIParent:Show()
 	Tick()
 	Equal(game.fpsText.text, "30", "updated when shown again")
 end)
@@ -829,27 +890,186 @@ Test("when Blizzard places a frame again, the move goes on top of Blizzard's new
 	Near(MainStatusTrackingBarContainer:GetWidth(), 600 + GROWTH + (9 - BAGS_JOIN_X) * BAGS_SCALE, "resized XP bar")
 end)
 
-Test("in Edit Mode the bar is exactly the layout's, and the block comes back after", function()
+-- Where the block's center stands in the row, in UIParent units: its bottom left joined to the
+-- micro menu's bottom right as the bags bar is.
+local ROW_CENTER_X = MICRO_MENU_RIGHT + (BAGS_JOIN_X + SLOT_SIZE / 2) * BAGS_SCALE
+local ROW_CENTER_Y = MICRO_MENU_BOTTOM + (BAGS_JOIN_Y + SLOT_SIZE / 2) * BAGS_SCALE
+
+local function BlockAnchor()
+	local point, relativeTo, relativePoint, x, y = game.block:GetPoint(1)
+	return point, relativeTo, relativePoint, x, y
+end
+
+-- The player drags the block in Edit Mode and drops it with its center at x, y (UIParent units).
+local function DragTo(x, y)
+	local editBox = game.editBox
+	editBox.scripts.OnDragStart(editBox, "LeftButton")
+	game.kitWhileDragging, game.movingWhileDragging = editBox.kit, game.block.moving
+	local toBlock = 1 / BAGS_SCALE
+	game.block.centerX, game.block.centerY = x * toBlock, y * toBlock
+	editBox.scripts.OnDragStop(editBox)
+end
+
+-- Nothing on the bar moved: everything stands where Blizzard put it.
+local function BarAsTheGameSetIt(when)
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu " .. when)
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar " .. when)
+	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar " .. when)
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar " .. when)
+end
+
+Test("in Edit Mode the block shows in Edit Mode's box above the micro menu, the bar is the layout's, and it all comes back after", function()
 	NewGame()
 	Login()
 	game.callbacks["EditMode.Enter"]()
-	Equal(game.block:IsShown(), false, "block shown")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
-	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
-	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar")
+	Equal(game.block:IsShown(), true, "block shown")
+	local point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMRIGHT TOPRIGHT 0 " .. (MICRO_MENU_REACH + BAR_REACH_BOTTOM), "above the micro menu")
+	Equal(relativeTo, MicroMenuContainer, "anchored to")
+	Equal(game.editBox:IsShown(), true, "Edit Mode box")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box")
+	Equal(game.editBox.template, "NineSliceCodeTemplate", "the box's template")
+	BarAsTheGameSetIt("in Edit Mode")
+	game.editBox.scripts.OnEnter(game.editBox)
+	Equal(game.tooltip[1], "Am I Lagging?", "name on mouse over")
 	game.callbacks["EditMode.Exit"]()
-	Equal(game.block:IsShown(), true, "block back")
+	Equal(game.editBox:IsShown(), false, "Edit Mode box after")
+	point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after")
 	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar after")
 end)
 
-Test("starting in Edit Mode keeps the block hidden until it closes", function()
+Test("starting in Edit Mode shows the block above the micro menu until it closes", function()
 	NewGame({ before = function() game.editMode = true end })
 	Login()
-	Equal(game.block:IsShown(), false, "block shown")
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
+	Equal(game.block:IsShown(), true, "block shown")
+	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu")
+	BarAsTheGameSetIt("in Edit Mode")
+end)
+
+Test("dragging the block in Edit Mode floats it where it's dropped, remembers the spot and gives the bar back", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	DragTo(300, 400)
+	Equal(game.kitWhileDragging, "editmode-actionbar-selected", "the yellow box while dragging")
+	Equal(game.movingWhileDragging, true, "moved by the player")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box after")
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "saved spot")
+	local point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(point .. " " .. relativePoint, "CENTER BOTTOMLEFT", "anchor")
+	Equal(relativeTo, UIParent, "anchored to")
+	Near(x, 300 / BAGS_SCALE, "x in the block's units")
+	Near(y, 400 / BAGS_SCALE, "y in the block's units")
+	game.callbacks["EditMode.Exit"]()
+	Equal((BlockAnchor()), "CENTER", "still there after Edit Mode")
+	BarAsTheGameSetIt("with the block floating")
+end)
+
+Test("dragging the block back by the micro menu puts it back in the row and forgets the spot", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 300, y = 400 } } end })
+	Login()
+	BarAsTheGameSetIt("with a saved spot")
+	game.callbacks["EditMode.Enter"]()
+	DragTo(ROW_CENTER_X + 10, ROW_CENTER_Y - 10)
+	Equal(AmILaggingDB.spot, nil, "saved spot")
+	game.callbacks["EditMode.Exit"]()
+	local point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the row makes room again")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar stretched again")
+end)
+
+Test("while the player drags the block, the bar's own changes leave it in their hand", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	local editBox = game.editBox
+	editBox.scripts.OnDragStart(editBox, "LeftButton")
+	local points = game.block.points
+	MicroMenuContainer:ClearAllPoints()
+	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+	Equal(game.block.points, points, "block re-anchored while dragged")
+	Equal(game.block.moving, true, "still moving")
+	game.block.centerX, game.block.centerY = 300 / BAGS_SCALE, 400 / BAGS_SCALE
+	editBox.scripts.OnDragStop(editBox)
+	Equal((BlockAnchor()), "CENTER", "dropped")
+end)
+
+Test("a saved spot puts the block there at login", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 250, y = 500 } } end })
+	Login()
+	local point, relativeTo, _, x, y = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == UIParent), "CENTER true", "anchor")
+	Near(x, 250 / BAGS_SCALE, "x")
+	Near(y, 500 / BAGS_SCALE, "y")
+	Equal(game.block.clamped, true, "kept on the screen")
+	Equal(table.concat(game.block.clampInsets, " "), table.concat({ -BAR_REACH_LEFT, BAR_REACH_RIGHT, BAR_REACH_TOP, -BAR_REACH_BOTTOM }, " "), "its frame art kept on the screen too")
+end)
+
+Test("the saved data keeps a valid spot and drops everything else", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 120.5, y = -3, extra = 1 }, junk = true } end })
+	Login()
+	Equal(AmILaggingDB.format, 1, "format")
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "120.5 -3", "spot")
+	Equal(AmILaggingDB.spot.extra, nil, "extra field in the spot")
+	Equal(AmILaggingDB.junk, nil, "unknown field")
+end)
+
+Test("broken saved data is dropped and the block stands in the row", function()
+	local cases = {
+		{ "nothing saved", nil },
+		{ "not a table", "here" },
+		{ "a spot that isn't a table", { spot = "here" } },
+		{ "a spot with text", { spot = { x = "1", y = 2 } } },
+		{ "a spot with half of it", { spot = { x = 1 } } },
+		{ "a spot that isn't a number", { spot = { x = 0 / 0, y = 2 } } },
+		{ "a spot at infinity", { spot = { x = math.huge, y = 2 } } },
+	}
+	for _, case in ipairs(cases) do
+		NewGame({ before = function() AmILaggingDB = case[2] end })
+		Login()
+		Equal(type(AmILaggingDB), "table", case[1] .. ": saved data")
+		Equal(AmILaggingDB.format, 1, case[1] .. ": format")
+		Equal(AmILaggingDB.spot, nil, case[1] .. ": spot")
+		Equal((BlockAnchor()), "BOTTOMLEFT", case[1] .. ": in the row")
+	end
+end)
+
+Test("next to a moved micro menu, the block floats on a free side and nothing on the bar moves", function()
+	-- The bags bar still hangs off the micro menu's right and the action bar off its left:
+	-- neither side is free, so the block stands above the micro menu.
+	NewGame({ before = function() game.microMenuMoved = true end })
+	Login()
+	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu")
+	BarAsTheGameSetIt("with the micro menu moved")
+	-- The player moved the bags bar away: the right side is free.
+	BagsBar:ClearAllPoints()
+	BagsBar:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+	local point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "on the right")
+	Equal(relativeTo, MicroMenuContainer, "anchored to")
+	-- The action bar moved away, then the micro menu moved to the screen's right edge: the
+	-- left side.
+	MainActionBar:ClearAllPoints()
+	MainActionBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 10, 10)
+	MicroMenuContainer.left, MicroMenuContainer.right = SCREEN_WIDTH - 310, SCREEN_WIDTH - 10
+	MicroMenuContainer:ClearAllPoints()
+	MicroMenuContainer:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+	point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMRIGHT BOTTOMLEFT -7 -4", "on the left")
+	Equal(OffsetX(BagsBar, "BOTTOMRIGHT"), -10, "bags bar")
+end)
+
+Test("in the gamepad interface the block can't be dragged in Edit Mode", function()
+	NewGame()
+	Login()
+	SwitchToGamepad()
+	game.callbacks["EditMode.Enter"]()
+	Equal(game.block:IsShown(), true, "block shown")
+	Equal(game.editBox:IsShown(), false, "Edit Mode box")
+	Equal((BlockAnchor()), "CENTER", "between the gamepad buttons and the XP bar")
 end)
 
 Test("in combat every change waits for the end of combat", function()
@@ -863,7 +1083,7 @@ Test("in combat every change waits for the end of combat", function()
 	Equal(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar in combat")
 	game.combat = false
 	FireEvent("PLAYER_REGEN_ENABLED")
-	Equal(game.block:IsShown(), false, "block after combat (no micro menu)")
+	Equal((BlockAnchor()), "CENTER", "block floats after combat (no micro menu)")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu after combat")
 	Near(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar after combat")
 end)
@@ -884,19 +1104,23 @@ Test("the block stays when the bags bar is hidden, however it was hidden", funct
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu with the bags bar in a hidden frame")
 end)
 
-Test("without the micro menu on screen the block hides and nothing moves, until it's back", function()
+Test("without the micro menu on screen the block floats above the XP bar and nothing moves, until it's back", function()
 	NewGame()
 	Login()
 	local hiddenFrame = CreateFrame("Frame", nil, UIParent)
 	hiddenFrame:Hide()
 	MicroMenu:SetParent(hiddenFrame)
-	Equal(game.block:IsShown(), false, "block without the micro menu")
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X, "bags bar")
-	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar")
-	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar")
+	Equal(game.block:IsShown(), true, "block without the micro menu")
+	local point, relativeTo, relativePoint, _, y = BlockAnchor()
+	Equal(point .. " " .. relativePoint .. " " .. tostring(relativeTo == UIParent), "CENTER BOTTOM true", "above the XP bar")
+	Near(y, (GAMEPAD_BUTTONS_BOTTOM + 0) / 2 / BAGS_SCALE, "between the gamepad buttons' place and the screen's bottom (no XP bar edge known)")
+	BarAsTheGameSetIt("without the micro menu")
+	game.callbacks["EditMode.Enter"]()
+	Equal(game.editBox:IsShown(), true, "can be dragged in Edit Mode")
+	game.callbacks["EditMode.Exit"]()
 	MicroMenu:SetParent(MicroMenuContainer)
-	Equal(game.block:IsShown(), true, "block with the micro menu back")
+	point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu back")
 end)
 
