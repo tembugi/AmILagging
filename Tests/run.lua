@@ -191,6 +191,12 @@ local function NewRegion(parent)
 	function region:RegisterForDrag(button)
 		self.dragButton = button
 	end
+	function region:EnableKeyboard(enabled)
+		self.keyboard = enabled
+	end
+	function region:SetPropagateKeyboardInput(propagate)
+		self.propagate = propagate
+	end
 	-- The client refuses to move a frame that isn't movable.
 	function region:StartMoving()
 		assert(self.movable, "Frame is not movable")
@@ -421,6 +427,14 @@ local function NewGame(options)
 	function InCombatLockdown()
 		return game.combat
 	end
+	function IsShiftKeyDown()
+		return game.shift
+	end
+	game.sounds = {}
+	function PlaySound(soundKit)
+		game.sounds[#game.sounds + 1] = soundKit
+	end
+	SOUNDKIT = { IG_MAINMENU_CLOSE = 851 }
 	function GetNetStats()
 		if game.net.fail then
 			error("no stats")
@@ -1308,6 +1322,42 @@ Test("a block on a spot of its own stays there when the micro menu is selected a
 	MoveMicroMenu(1400, 300)
 	EditModeManagerFrame:ClearSelectedSystem()
 	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "its spot")
+end)
+
+local function PressKey(key)
+	local dialog = SettingsDialog().frame
+	dialog.scripts.OnKeyDown(dialog, key)
+	return dialog.propagate
+end
+
+Test("Escape closes the block's settings with the game's close sound, and other keys go on to the game", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	Equal(SettingsDialog().frame.keyboard, true, "takes keys")
+	Equal(PressKey("W"), true, "W goes on to the game")
+	Equal(PressKey("ESCAPE"), false, "Escape kept")
+	Equal(SettingsDialog().frame:IsShown(), false, "closed")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "deselected")
+	Equal(game.sounds[#game.sounds], SOUNDKIT.IG_MAINMENU_CLOSE, "the game's close sound")
+end)
+
+Test("the arrow keys move the selected block a step, ten with Shift, as Edit Mode moves its bars", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	ClickBlock()
+	Equal(PressKey("RIGHT"), false, "the arrow key kept")
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X + BAGS_SCALE, "a step right, in the block's units")
+	Near(AmILaggingDB.spot.y, ROW_CENTER_Y, "same height")
+	Equal((BlockAnchor()), "CENTER", "on its own now")
+	BarAsTheGameSetIt("with the block moved off the bar")
+	game.shift = true
+	PressKey("UP")
+	Near(AmILaggingDB.spot.y, ROW_CENTER_Y + 10 * BAGS_SCALE, "ten steps up with Shift")
+	Equal(SettingsDialog().revert:IsEnabled(), true, "the move can be reverted")
 end)
 
 Test("the saved size is kept only inside the slider's range and when it isn't the default", function()

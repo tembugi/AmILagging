@@ -928,6 +928,38 @@ local function ResetPosition()
 	UpdateDialog()
 end
 
+-- A frame's center in UIParent units.
+local function CenterOf(frame)
+	local x, y = frame:GetCenter()
+	if not x then
+		return nil
+	end
+	local toUIParent = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+	return x * toUIParent, y * toUIParent
+end
+
+-- The arrow keys move the selected block a step, ten with Shift, as Edit Mode moves its bars
+-- (EditModeSystemMixin:ProcessMovementKey): steps in the block's own units. A block in the row or
+-- by the micro menu then stands on its own, a step from where it stood.
+local NUDGES = { UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } }
+local NUDGE_STEP, NUDGE_SHIFT_STEP = 1, 10
+
+local function Nudge(key)
+	local x, y
+	if saved.spot then
+		x, y = saved.spot.x, saved.spot.y
+	else
+		x, y = CenterOf(block)
+	end
+	if not x then
+		return
+	end
+	local step = (IsShiftKeyDown() and NUDGE_SHIFT_STEP or NUDGE_STEP) * BlockToUIParent()
+	saved.spot = { x = x + NUDGES[key][1] * step, y = y + NUDGES[key][2] * step }
+	Layout()
+	UpdateDialog()
+end
+
 local function Deselect()
 	selected = false
 	if dialog then
@@ -947,6 +979,23 @@ local function CreateDialog()
 	dialog:RegisterForDrag("LeftButton")
 	dialog:SetScript("OnDragStart", dialog.StartMoving)
 	dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+	-- Like the game's dialog: closing it plays the game's close sound, Escape closes it and the
+	-- arrow keys move the block. Other keys go on to the game, so the player can still move.
+	dialog:SetScript("OnHide", function()
+		PlaySound(SOUNDKIT.IG_MAINMENU_CLOSE)
+	end)
+	dialog:EnableKeyboard(true)
+	dialog:SetScript("OnKeyDown", function(self, key)
+		local handled = key == "ESCAPE" or NUDGES[key] ~= nil
+		if not InCombatLockdown() then
+			self:SetPropagateKeyboardInput(not handled)
+		end
+		if key == "ESCAPE" then
+			Guarded(Deselect)
+		elseif NUDGES[key] then
+			Guarded(Nudge, key)
+		end
+	end)
 	dialog:Hide()
 
 	local border = CreateFrame("Frame", nil, dialog, "DialogBorderTranslucentTemplate")
@@ -1032,16 +1081,6 @@ local function Select()
 	UpdateDialog()
 	dialog:Show()
 	ShowEditBox(true)
-end
-
--- A frame's center in UIParent units.
-local function CenterOf(frame)
-	local x, y = frame:GetCenter()
-	if not x then
-		return nil
-	end
-	local toUIParent = frame:GetEffectiveScale() / UIParent:GetEffectiveScale()
-	return x * toUIParent, y * toUIParent
 end
 
 -- The block is its own thing: when the player selects the micro menu in Edit Mode (to drag it or
