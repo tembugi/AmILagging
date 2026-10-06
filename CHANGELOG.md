@@ -1,5 +1,4 @@
 ## v1.5.0
 
-- The block now moves with the menu buttons, wherever you put them in Edit Mode, and the bags bar makes room for it there.
-- Drop the block next to the menu buttons and it snaps back into its place.
-- Reset To Default Position puts it back next to the menu buttons.
+- The block now moves with the menu bar in Edit Mode.
+- Fixed an issue where Reset To Default Position could put the block in the wrong place.
