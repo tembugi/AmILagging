@@ -1659,10 +1659,11 @@ Test("a saved spot puts the block there at login", function()
 end)
 
 Test("the saved data keeps a valid spot and drops everything else", function()
-	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 120.5, y = -3, extra = 1 }, junk = true } end })
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 120.5, y = -3, extra = 1 }, gamepadSpot = { x = 7, y = 8 }, junk = true } end })
 	Login()
 	Equal(AmILaggingDB.format, 1, "format")
 	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "120.5 -3", "spot")
+	Equal(AmILaggingDB.gamepadSpot.x .. " " .. AmILaggingDB.gamepadSpot.y, "7 8", "gamepad spot")
 	Equal(AmILaggingDB.spot.extra, nil, "extra field in the spot")
 	Equal(AmILaggingDB.junk, nil, "unknown field")
 end)
@@ -1676,13 +1677,17 @@ Test("broken saved data is dropped and the block stands in the row", function()
 		{ "a spot with half of it", { spot = { x = 1 } } },
 		{ "a spot that isn't a number", { spot = { x = 0 / 0, y = 2 } } },
 		{ "a spot at infinity", { spot = { x = math.huge, y = 2 } } },
+		{ "a broken gamepad spot", { gamepadSpot = { x = 1 } } },
 	}
 	for _, case in ipairs(cases) do
 		NewGame({ before = function() AmILaggingDB = case[2] end })
 		Login()
 		Equal(type(AmILaggingDB), "table", case[1] .. ": saved data")
-		Equal(AmILaggingDB.format, 1, case[1] .. ": format")
-		Equal(AmILaggingDB.spot, nil, case[1] .. ": spot")
+		---@type table
+		local db = AmILaggingDB
+		Equal(db.format, 1, case[1] .. ": format")
+		Equal(db.spot, nil, case[1] .. ": spot")
+		Equal(db.gamepadSpot, nil, case[1] .. ": gamepad spot")
 		Equal((BlockAnchor()), "BOTTOMLEFT", case[1] .. ": in the row")
 	end
 end)
@@ -1761,14 +1766,49 @@ Test("by a moved micro menu, dropping the block by it or Reset To Default Positi
 	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot after Reset To Default Position")
 end)
 
-Test("in the gamepad interface the block can't be dragged in Edit Mode", function()
+Test("in the gamepad interface the block moves in Edit Mode too, with a spot of its own", function()
 	NewGame()
 	Login()
 	SwitchToGamepad()
 	game.callbacks["EditMode.Enter"]()
-	Equal(game.block:IsShown(), true, "block shown")
-	Equal(game.editBox:IsShown(), false, "Edit Mode box")
+	Equal(game.editBox:IsShown(), true, "Edit Mode box")
 	Equal((BlockAnchor()), "CENTER", "between the gamepad buttons and the XP bar")
+	DragTo(300, 400)
+	Equal(AmILaggingDB.gamepadSpot.x .. " " .. AmILaggingDB.gamepadSpot.y, "300 400", "gamepad spot")
+	Equal(AmILaggingDB.spot, nil, "the mouse and keyboard spot")
+	-- Each interface keeps its own spot.
+	SwitchToKeyboard()
+	Equal((BlockAnchor()), "BOTTOMLEFT", "in its slot with mouse and keyboard")
+	DragTo(500, 600)
+	SwitchToGamepad()
+	local point, _, relativePoint, x, y = BlockAnchor()
+	Equal(point .. " " .. relativePoint, "CENTER BOTTOMLEFT", "on the gamepad spot")
+	Near(x * BAGS_SCALE, 300, "gamepad spot x")
+	Near(y * BAGS_SCALE, 400, "gamepad spot y")
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "500 600", "the mouse and keyboard spot kept")
+	-- Dropped by its gamepad place, it goes back there; so does Reset To Default Position.
+	DragTo(SCREEN_WIDTH / 2 + 10, (XP_BAR_HEIGHT + GAMEPAD_BUTTONS_BOTTOM) / 2 - 10)
+	Equal(AmILaggingDB.gamepadSpot, nil, "gamepad spot after dropping it home")
+	Equal((select(3, BlockAnchor())), "BOTTOM", "home between the gamepad buttons and the XP bar")
+	DragTo(300, 400)
+	ClickBlock()
+	Equal(SettingsDialog().reset:IsEnabled(), true, "the gamepad spot can be reset")
+	SettingsDialog().reset.onClick()
+	Equal(AmILaggingDB.gamepadSpot, nil, "gamepad spot after Reset To Default Position")
+	Equal(AmILaggingDB.spot.x, 500, "the mouse and keyboard spot untouched")
+	-- Revert puts back both spots as they were when Edit Mode opened.
+	SettingsDialog().revert.onClick()
+	Equal(AmILaggingDB.spot, nil, "mouse and keyboard spot after Revert Changes")
+	-- Only the gamepad spot changed: there is something to revert, and it goes back.
+	NewGame()
+	Login()
+	SwitchToGamepad()
+	game.callbacks["EditMode.Enter"]()
+	DragTo(300, 400)
+	ClickBlock()
+	Equal(SettingsDialog().revert:IsEnabled(), true, "a gamepad change can be reverted")
+	SettingsDialog().revert.onClick()
+	Equal(AmILaggingDB.gamepadSpot, nil, "gamepad spot after Revert Changes")
 end)
 
 Test("in combat every change waits for the end of combat", function()

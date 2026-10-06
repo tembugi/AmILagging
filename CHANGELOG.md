@@ -1,5 +1,3 @@
-## v1.5.0
+## v1.5.1
 
-- The block now moves with the menu bar in Edit Mode.
-- Fixed an issue where Reset To Default Position could put the block in the wrong place.
-- Small fixes.
+- You can now move and resize the block in Edit Mode in the gamepad interface too.

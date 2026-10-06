@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.5.0"
+local VERSION = "1.5.1"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -62,10 +62,11 @@ local function SayProblem(problem, advice)
 	print(NORMAL_FONT_COLOR:WrapTextInColorCode(ADDON_TITLE) .. ": " .. RED_FONT_COLOR:WrapTextInColorCode(problem) .. " " .. advice)
 end
 
--- The saved data, per account (AmILaggingDB), both set in Edit Mode: where the player put the
--- block, as its center in UIParent units from the screen's bottom left, and its size, as a
--- percentage of the bags bar's. Without a spot the block stands where the addon puts it;
--- without a size it is as big as the bags bar. Nothing else is saved.
+-- The saved data, per account (AmILaggingDB), all set in Edit Mode: where the player put the
+-- block, as its center in UIParent units from the screen's bottom left, one spot for the mouse
+-- and keyboard interface and one for the gamepad interface (the game keeps a layout for each),
+-- and its size, as a percentage of the bags bar's, for both. Without a spot the block stands
+-- where the addon puts it; without a size it is as big as the bags bar. Nothing else is saved.
 local SAVE_FORMAT = 1
 local DEFAULT_SIZE = 100
 local saved = { format = SAVE_FORMAT }
@@ -90,11 +91,15 @@ end
 -- Rebuilds the saved data on every load from the fields the addon uses and drops everything
 -- else: a spot stays only when both its numbers are finite, a size only when it is in the
 -- slider's range and isn't the default.
+local SPOT_KEYS = { "spot", "gamepadSpot" }
+
 local function NormalizeSaved(data)
 	local result = { format = SAVE_FORMAT }
-	local spot = type(data) == "table" and data.spot
-	if type(spot) == "table" and IsFiniteNumber(spot.x) and IsFiniteNumber(spot.y) then
-		result.spot = { x = spot.x, y = spot.y }
+	for _, key in ipairs(SPOT_KEYS) do
+		local spot = type(data) == "table" and data[key]
+		if type(spot) == "table" and IsFiniteNumber(spot.x) and IsFiniteNumber(spot.y) then
+			result[key] = { x = spot.x, y = spot.y }
+		end
 	end
 	local size = type(data) == "table" and data.size
 	local minSize, maxSize = SizeRange()
@@ -646,25 +651,34 @@ local function InGamepadInterface()
 		and C_InputInterfaceStyle.GetCurrentStyle() == Enum.InputDeviceInterfaceType.Gamepad
 end
 
+-- Which saved spot is in use: the gamepad interface's own, or the mouse and keyboard one.
+local function SpotKey()
+	return InGamepadInterface() and "gamepadSpot" or "spot"
+end
+
 
 -- Where the block stands:
 -- "slot": in its slot by the micro menu, wherever the micro menu stands (see SlotAnchor);
--- "spot": where the player put it in Edit Mode;
+-- "spot": where the player put it in Edit Mode, in this interface;
 -- "aboveXPBar": on its own, centered between the XP bar and the gamepad buttons: in the gamepad
---   interface, where the game hides the row, or when the micro menu isn't on screen (another
---   addon replacing the game's bars);
+--   interface, where the game hides the row (the user's default there), or when the micro menu
+--   isn't on screen (another addon replacing the game's bars);
 -- nil: hidden, after a failure.
-local function Placement()
-	if failure then
-		return nil
-	elseif InGamepadInterface() then
-		return "aboveXPBar"
-	elseif saved.spot then
-		return "spot"
-	elseif not OnScreen(MicroMenu or MicroMenuContainer) then
+-- Without a spot it stands at home: where Reset To Default Position puts it.
+local function HomePlacement()
+	if InGamepadInterface() or not OnScreen(MicroMenu or MicroMenuContainer) then
 		return "aboveXPBar"
 	end
 	return "slot"
+end
+
+local function Placement()
+	if failure then
+		return nil
+	elseif saved[SpotKey()] then
+		return "spot"
+	end
+	return HomePlacement()
 end
 
 -- How the bags bar hangs off the micro menu's right side, as Blizzard set it: its point, the
@@ -930,9 +944,10 @@ end
 
 local function UpdateButtons()
 	local changed = editModeStart ~= nil
-		and (not SameSpot(saved.spot, editModeStart.spot) or saved.size ~= editModeStart.size)
+		and (not SameSpot(saved.spot, editModeStart.spot) or not SameSpot(saved.gamepadSpot, editModeStart.gamepadSpot)
+			or saved.size ~= editModeStart.size)
 	revertButton:SetEnabled(changed)
-	resetButton:SetEnabled(saved.spot ~= nil)
+	resetButton:SetEnabled(saved[SpotKey()] ~= nil)
 end
 
 local function ShowAsPercentage(value)
@@ -966,13 +981,14 @@ end
 
 local function RevertChanges()
 	saved.spot = CopySpot(editModeStart.spot)
+	saved.gamepadSpot = CopySpot(editModeStart.gamepadSpot)
 	saved.size = editModeStart.size
 	Layout()
 	UpdateDialog()
 end
 
 local function ResetPosition()
-	saved.spot = nil
+	saved[SpotKey()] = nil
 	Layout()
 	UpdateDialog()
 end
@@ -995,8 +1011,9 @@ local NUDGE_STEP, NUDGE_SHIFT_STEP = 1, 10
 
 local function Nudge(key)
 	local x, y
-	if saved.spot then
-		x, y = saved.spot.x, saved.spot.y
+	local spot = saved[SpotKey()]
+	if spot then
+		x, y = spot.x, spot.y
 	else
 		x, y = CenterOf(block)
 	end
@@ -1004,7 +1021,7 @@ local function Nudge(key)
 		return
 	end
 	local step = (IsShiftKeyDown() and NUDGE_SHIFT_STEP or NUDGE_STEP) * BlockToUIParent()
-	saved.spot = { x = x + NUDGES[key][1] * step, y = y + NUDGES[key][2] * step }
+	saved[SpotKey()] = { x = x + NUDGES[key][1] * step, y = y + NUDGES[key][2] * step }
 	Layout()
 	UpdateDialog()
 end
@@ -1132,20 +1149,29 @@ local function Select()
 	ShowEditBox(true)
 end
 
--- Where the player drops the block: back in its slot when dropped within a slot's size of it,
--- wherever the micro menu stands, else on its own right there.
+-- Where the block's center stands at home, in UIParent units. Nil when the micro menu's edges
+-- aren't known yet.
+local function HomeCenter()
+	if HomePlacement() == "aboveXPBar" then
+		return (UIParent:GetLeft() + UIParent:GetRight()) / 2, AboveXPBarHeight()
+	end
+	return SlotCenter()
+end
+
+-- Where the player drops the block: back home when dropped within a slot's size of it (its slot,
+-- wherever the micro menu stands, or its gamepad place), else on its own right there.
 local function OnDropped()
 	dragging = false
 	block:StopMovingOrSizing()
 	local x, y = block:GetCenter()
 	local toUIParent = BlockToUIParent()
 	x, y = x * toUIParent, y * toUIParent
-	local slotX, slotY = SlotCenter()
+	local homeX, homeY = HomeCenter()
 	local reach = art.slotSize * toUIParent
-	if slotX and math.abs(x - slotX) <= reach and math.abs(y - slotY) <= reach then
-		saved.spot = nil
+	if homeX and math.abs(x - homeX) <= reach and math.abs(y - homeY) <= reach then
+		saved[SpotKey()] = nil
 	else
-		saved.spot = { x = x, y = y }
+		saved[SpotKey()] = { x = x, y = y }
 	end
 	Layout()
 	UpdateDialog()
@@ -1210,12 +1236,13 @@ function Layout()
 			end
 		end
 	elseif placement == "spot" then
-		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(saved.spot.x, block), InFrameUnits(saved.spot.y, block))
+		local spot = saved[SpotKey()]
+		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(spot.x, block), InFrameUnits(spot.y, block))
 	elseif placement == "aboveXPBar" then
 		block:SetPoint("CENTER", UIParent, "BOTTOM", 0, InFrameUnits(AboveXPBarHeight(), block))
 	end
 	block:SetShown(placement ~= nil)
-	ShowEditBox(editModeOpen and placement ~= nil and not InGamepadInterface())
+	ShowEditBox(editModeOpen and placement ~= nil)
 	if selected and not editBox:IsShown() then
 		Deselect()
 	end
@@ -1263,7 +1290,7 @@ end
 
 local function OnEditModeEnter()
 	editModeOpen = true
-	editModeStart = { spot = CopySpot(saved.spot), size = saved.size }
+	editModeStart = { spot = CopySpot(saved.spot), gamepadSpot = CopySpot(saved.gamepadSpot), size = saved.size }
 	Layout()
 end
 
@@ -1293,7 +1320,7 @@ end
 -- Saving the layout keeps the block as it is: what Revert Changes and Revert All Changes go back to.
 local function OnLayoutsSaved()
 	if editModeStart then
-		editModeStart = { spot = CopySpot(saved.spot), size = saved.size }
+		editModeStart = { spot = CopySpot(saved.spot), gamepadSpot = CopySpot(saved.gamepadSpot), size = saved.size }
 		UpdateDialog()
 	end
 end
