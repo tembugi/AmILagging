@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.4.2"
+local VERSION = "1.5.0"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -327,32 +327,24 @@ end
 -- bar: it stands where the bags bar stood, joined to the micro menu the same way, and the bags
 -- bar moves right to join the block as it joined the micro menu. Being its own bar, it stays
 -- when the bags bar is hidden, by another addon or by the game.
--- Edit Mode puts the row at a fixed spot, so a wider row would lean right. The whole row moves
--- left by half the growth, so it grows evenly on both sides and stays centered. What "the
--- whole row" hangs off depends on the layout: in a saved layout the action bar hangs off the
--- micro menu, but Edit Mode places bars in their default position on the screen itself. So
--- the addon follows the anchors of the action bar and of the micro menu up to the frames that
--- hang off the screen, and moves each of those once.
--- The block stands in the row only while the micro menu is where Blizzard's layout puts it.
--- When the player has customized the bar (moved the micro menu, or dragged the block somewhere
--- in Edit Mode), the block floats on its own and nothing on the bar moves. In the gamepad
--- interface the game hides the row; the block then stands on its own, centered between the
--- gamepad buttons and the XP bar.
+-- The block's slot is part of the micro menu, as the bags bar is in Blizzard's layout: the block
+-- stays in it wherever the player moves the micro menu, and the bags bar makes room there too.
+-- Where Blizzard's layout puts the micro menu, Edit Mode puts the row at a fixed spot, so a wider
+-- row would lean right: the whole row moves left by half the growth, so it grows evenly on both
+-- sides and stays centered. What "the whole row" hangs off depends on the layout: in a saved
+-- layout the action bar hangs off the micro menu, but Edit Mode places bars in their default
+-- position on the screen itself. So the addon follows the anchors of the action bar and of the
+-- micro menu up to the frames that hang off the screen, and moves each of those once. Where the
+-- player put the micro menu, it stays, and the row grows to the right.
+-- A block the player dragged somewhere in Edit Mode stands there on its own, and nothing on the
+-- bar moves. In the gamepad interface the game hides the row; the block then stands on its own,
+-- centered between the gamepad buttons and the XP bar.
 -- The layout is never written: Edit Mode anchors these frames again on every layout change and
 -- saves only what the player moves, where they drop it; the moves apply only to bars still in
 -- Blizzard's arrangement, also while Edit Mode is open. Without the addon the bar is exactly as
 -- the layout says.
 local editModeOpen = false
 local layoutPending = false
-local lastPlacement -- where the last layout put the block
--- While the micro menu is selected in Edit Mode: where the block and the micro menu stood when it
--- was selected (their centers in UIParent units), so the block stays put while the menu moves.
-local menuHold
--- The spot the block kept when the micro menu moved away from it (see ReleaseBlock). Until Edit
--- Mode closes, it is given up if the micro menu goes back where Blizzard's layout puts it (Revert
--- All Changes, leaving without saving, the menu's Reset To Default Position): the block goes back
--- in the row, rather than standing where the bags bar comes back.
-local keptSpot
 local rowMovers = {} -- frame -> mover, for the frames moved so far
 local xpBars = {} -- XP bar container -> its stretch
 local Layout, ShowEditBox
@@ -632,10 +624,8 @@ end
 
 
 -- Where the block stands:
--- "row": in the bottom row, right of the micro menu, while the micro menu is where Blizzard's
---   layout puts it, Edit Mode open or not;
+-- "slot": in its slot by the micro menu, wherever the micro menu stands (see SlotAnchor);
 -- "spot": where the player put it in Edit Mode;
--- "besideMicroMenu": next to a micro menu the player moved, on a side with room;
 -- "aboveXPBar": on its own, centered between the XP bar and the gamepad buttons: in the gamepad
 --   interface, where the game hides the row, or when the micro menu isn't on screen (another
 --   addon replacing the game's bars);
@@ -649,10 +639,8 @@ local function Placement()
 		return "spot"
 	elseif not OnScreen(MicroMenu or MicroMenuContainer) then
 		return "aboveXPBar"
-	elseif not InDefaultPosition(MicroMenuContainer) then
-		return "besideMicroMenu"
 	end
-	return "row"
+	return "slot"
 end
 
 -- How the bags bar hangs off the micro menu's right side, as Blizzard set it: its point, the
@@ -753,35 +741,37 @@ local function HangsOffMicroMenu(frame, side)
 	return false
 end
 
--- Just above the micro menu's right end, clear of its frame art.
-local function SetAboveMicroMenu()
-	block:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "TOPRIGHT", 0, art.microMenuReachTop + art.barReach.bottom)
-end
-
--- Next to a micro menu the player moved, joined as on the row: on its right side when the bags
--- bar doesn't hang there and the block fits on the screen, else on its left side when the action
--- bar doesn't hang there and the block fits, else above it.
-local function SetBesideMicroMenu(point, relativePoint, x, y)
+-- The block's slot by the micro menu: its point, the micro menu's point and the offsets in the
+-- block's units, and whether the bar makes room for it there (the bags bar's join x, and whether
+-- the bags bar hangs there). It is on the micro menu's right side, where the bags bar hangs in
+-- Blizzard's layout, joined the same way. It stays on the screen: when it, or the bags bar making
+-- room for it, would reach past the right edge, it stands on the left side, unless the action bar
+-- hangs there or it wouldn't fit there either, and else just above the micro menu's right end.
+-- There nothing makes room.
+local function SlotAnchor()
+	local point, relativePoint, x, y, bagsJoined = JoinToMicroMenu()
 	local toUIParent = BlockToUIParent()
 	local join = x * BagsScale() / UIParent:GetEffectiveScale()
 	local left, right = EdgeOf(MicroMenuContainer, "left"), EdgeOf(MicroMenuContainer, "right")
 	local rightEnd = right and right + join + (art.slotSize + art.barReach.right) * toUIParent
-	if not HangsOffMicroMenu(BagsBar, "RIGHT") and (not rightEnd or rightEnd <= UIParent:GetRight()) then
-		block:SetPoint(point, MicroMenuContainer, relativePoint, BagsToBlock(x), BagsToBlock(y))
-		return
+	if rightEnd and bagsJoined then
+		local bagsWidth = BagsBar:GetWidth() * BagsScale() / UIParent:GetEffectiveScale()
+		rightEnd = math.max(rightEnd, right + join + RowGrowth(x) + bagsWidth)
+	end
+	if not rightEnd or rightEnd <= UIParent:GetRight() then
+		return point, relativePoint, BagsToBlock(x), BagsToBlock(y), x, bagsJoined
 	end
 	local leftEnd = left and left - join - (art.slotSize + art.barReach.left) * toUIParent
 	if not HangsOffMicroMenu(MainActionBar, "LEFT") and (not leftEnd or leftEnd >= 0) then
-		block:SetPoint(Mirrored(point), MicroMenuContainer, Mirrored(relativePoint), BagsToBlock(-x), BagsToBlock(y))
-		return
+		return Mirrored(point), Mirrored(relativePoint), BagsToBlock(-x), BagsToBlock(y)
 	end
-	SetAboveMicroMenu()
+	return "BOTTOMRIGHT", "TOPRIGHT", 0, art.microMenuReachTop + art.barReach.bottom
 end
 
--- Where the block's center stands in the row, in UIParent units: joined to the micro menu's
--- right side as JoinToMicroMenu says. Nil when the micro menu's edges aren't known yet.
-local function RowCenter()
-	local point, relativePoint, x, y = JoinToMicroMenu()
+-- Where the block's center stands in its slot, in UIParent units. Nil when the micro menu's edges
+-- aren't known yet.
+local function SlotCenter()
+	local point, relativePoint, x, y = SlotAnchor()
 	local left, right = EdgeOf(MicroMenuContainer, "left"), EdgeOf(MicroMenuContainer, "right")
 	local bottom, top = EdgeOf(MicroMenuContainer, "bottom"), EdgeOf(MicroMenuContainer, "top")
 	if not (left and right and bottom and top) then
@@ -791,12 +781,12 @@ local function RowCenter()
 	local function Along(name, low, high)
 		return name:find(low) and -1 or name:find(high) and 1 or 0
 	end
-	local bagsToUIParent = BagsScale() / UIParent:GetEffectiveScale()
-	local half = art.slotSize / 2 * BlockToUIParent()
+	local toUIParent = BlockToUIParent()
+	local half = art.slotSize / 2 * toUIParent
 	local anchorX = (left + right) / 2 + Along(relativePoint, "LEFT", "RIGHT") * (right - left) / 2
 	local anchorY = (bottom + top) / 2 + Along(relativePoint, "BOTTOM", "TOP") * (top - bottom) / 2
-	return anchorX + x * bagsToUIParent - Along(point, "LEFT", "RIGHT") * half,
-		anchorY + y * bagsToUIParent - Along(point, "BOTTOM", "TOP") * half
+	return anchorX + x * toUIParent - Along(point, "LEFT", "RIGHT") * half,
+		anchorY + y * toUIParent - Along(point, "BOTTOM", "TOP") * half
 end
 
 -- In Edit Mode the block shows as Edit Mode shows the game's bars: a blue box over it, yellow
@@ -850,8 +840,7 @@ end
 -- Size: the bags bar's Size slider, as a percentage of the bags bar's size; 100% is the default.
 -- Revert Changes: back to the spot and size the block had when Edit Mode opened or the layout was
 -- last saved, as the game's button reverts what changed since the layout was saved. Reset To
--- Default Position: back to
--- where the addon puts it (the row, or next to a moved micro menu); the size stays.
+-- Default Position: back in its slot by the micro menu, wherever that stands; the size stays.
 -- Its measures are read from the game's dialog, which always exists (hidden until it opens for
 -- one of the game's bars): strata and level, padding, title font and place, spacing, the Revert
 -- Changes button and the divider. These are Blizzard's values from EditModeDialogs.xml, used if
@@ -975,8 +964,8 @@ local function CenterOf(frame)
 end
 
 -- The arrow keys move the selected block a step, ten with Shift, as Edit Mode moves its bars
--- (EditModeSystemMixin:ProcessMovementKey): steps in the block's own units. A block in the row or
--- by the micro menu then stands on its own, a step from where it stood.
+-- (EditModeSystemMixin:ProcessMovementKey): steps in the block's own units. A block in its slot
+-- then stands on its own, a step from where it stood.
 local NUDGES = { UP = { 0, 1 }, DOWN = { 0, -1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } }
 local NUDGE_STEP, NUDGE_SHIFT_STEP = 1, 10
 
@@ -1119,52 +1108,17 @@ local function Select()
 	ShowEditBox(true)
 end
 
--- The block is its own thing: when the player selects the micro menu in Edit Mode (to drag it or
--- move it with the arrow keys), the block lets go of it and stays where it stands on the screen.
--- Only a block standing by the micro menu needs to; one on a spot of its own stands by the screen.
-local function HoldBlock()
-	if menuHold or (lastPlacement ~= "row" and lastPlacement ~= "besideMicroMenu") then
-		return
-	end
-	local x, y = CenterOf(block)
-	local menuX, menuY = CenterOf(MicroMenuContainer)
-	if not (x and menuX) then
-		return
-	end
-	menuHold = { x = x, y = y, menuX = menuX, menuY = menuY }
-	Layout()
-end
-
--- When the micro menu is let go: if the player moved it away from where Blizzard's layout puts
--- it, the block keeps the spot where it stood, as if the player had put it there; otherwise it
--- goes back to standing by the micro menu.
-local function ReleaseBlock()
-	if not menuHold then
-		return
-	end
-	local hold = menuHold
-	menuHold = nil
-	local menuX, menuY = CenterOf(MicroMenuContainer)
-	local moved = menuX and (math.abs(menuX - hold.menuX) > 0.5 or math.abs(menuY - hold.menuY) > 0.5)
-	if moved and not InDefaultPosition(MicroMenuContainer) and not saved.spot then
-		saved.spot = { x = hold.x, y = hold.y }
-		keptSpot = saved.spot
-	end
-	Layout()
-	UpdateDialog()
-end
-
--- Where the player drops the block: back in its place when dropped by the micro menu's right
--- end (within a slot's size of where it stands in the row), else on its own right there.
+-- Where the player drops the block: back in its slot when dropped within a slot's size of it,
+-- wherever the micro menu stands, else on its own right there.
 local function OnDropped()
 	dragging = false
 	block:StopMovingOrSizing()
 	local x, y = block:GetCenter()
 	local toUIParent = BlockToUIParent()
 	x, y = x * toUIParent, y * toUIParent
-	local rowX, rowY = RowCenter()
+	local slotX, slotY = SlotCenter()
 	local reach = art.slotSize * toUIParent
-	if rowX and math.abs(x - rowX) <= reach and math.abs(y - rowY) <= reach then
+	if slotX and math.abs(x - slotX) <= reach and math.abs(y - slotY) <= reach then
 		saved.spot = nil
 	else
 		saved.spot = { x = x, y = y }
@@ -1210,10 +1164,6 @@ function Layout()
 	if dragging then
 		return
 	end
-	if keptSpot and saved.spot == keptSpot and InDefaultPosition(MicroMenuContainer) then
-		saved.spot, keptSpot = nil, nil
-		UpdateDialog()
-	end
 
 	local placement = Placement()
 	local rowGrowth, bagsShift = 0, 0
@@ -1226,40 +1176,38 @@ function Layout()
 			block:SetFrameLevel(BagsBar:GetFrameLevel())
 		end
 	end
-	if placement == "row" then
-		local point, relativePoint, x, y, bagsJoined = JoinToMicroMenu()
-		block:SetPoint(point, MicroMenuContainer, relativePoint, BagsToBlock(x), BagsToBlock(y))
-		rowGrowth = RowGrowth(x)
-		if bagsJoined then
-			bagsShift = rowGrowth
+	if placement == "slot" then
+		local point, relativePoint, x, y, joinX, bagsJoined = SlotAnchor()
+		block:SetPoint(point, MicroMenuContainer, relativePoint, x, y)
+		if joinX then
+			rowGrowth = RowGrowth(joinX)
+			if bagsJoined then
+				bagsShift = rowGrowth
+			end
 		end
-	elseif placement == "besideMicroMenu" then
-		SetBesideMicroMenu(JoinToMicroMenu())
 	elseif placement == "spot" then
 		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(saved.spot.x, block), InFrameUnits(saved.spot.y, block))
 	elseif placement == "aboveXPBar" then
 		block:SetPoint("CENTER", UIParent, "BOTTOM", 0, InFrameUnits(AboveXPBarHeight(), block))
 	end
-	if menuHold and placement then
-		block:ClearAllPoints()
-		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(menuHold.x, block), InFrameUnits(menuHold.y, block))
-	end
-	lastPlacement = placement
 	block:SetShown(placement ~= nil)
 	ShowEditBox(editModeOpen and placement ~= nil and not InGamepadInterface())
 	if selected and not editBox:IsShown() then
 		Deselect()
 	end
 
-	-- Grow evenly: each root of the row moves left by half, once; the bars stacked on it move
-	-- right by half or stretch by the whole growth, and the bags bar moves right by the whole
-	-- growth to join the block. Frames no longer in either set go back to where Blizzard put
-	-- them.
+	-- Where Blizzard's layout puts the micro menu, the row grows evenly: each root of the row moves
+	-- left by half, once. Where the player put it, the row grows to the right. Either way the bars
+	-- stacked on it move right by half or stretch by the whole growth, and the bags bar moves right
+	-- by the whole growth to join the block. Frames no longer in either set go back to where
+	-- Blizzard put them.
 	local shifts = {} -- frame -> shift in UIParent units
 	local stretches = {} -- XP bar container -> added width in UIParent units
 	if rowGrowth ~= 0 then
-		for frame in pairs(RowRoots()) do
-			shifts[frame] = -rowGrowth / 2
+		if InDefaultPosition(MicroMenuContainer) then
+			for frame in pairs(RowRoots()) do
+				shifts[frame] = -rowGrowth / 2
+			end
 		end
 		for _, bar in ipairs(ActionBarInRow() and BottomBars() or {}) do
 			if IsStackedOnRow(bar) then
@@ -1299,10 +1247,8 @@ local function OnEditModeExit()
 	if dragging then
 		OnDropped()
 	end
-	ReleaseBlock()
 	Deselect()
 	editModeStart = nil
-	keptSpot = nil
 	editModeOpen = false
 	MeasureArt()
 	DressBlock()
@@ -1317,7 +1263,6 @@ local function RevertAll()
 	if not editModeStart then
 		return
 	end
-	menuHold, keptSpot = nil, nil
 	RevertChanges()
 end
 
@@ -1362,32 +1307,16 @@ local function SetUp(events)
 			RowMoverFor(BagsBar)
 		end
 		-- Selecting one of the game's bars in Edit Mode deselects the block, as it does the others,
-		-- and so does Edit Mode clearing its selection (its dialog closed, a layout change). Selecting
-		-- the micro menu makes the block let go of it; selecting anything else, or clearing the
-		-- selection, lets the micro menu go.
-		if EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
-			hooksecurefunc(EditModeManagerFrame, "SelectSystem", function(_, systemFrame)
-				Guarded(function()
-					if selected then
-						Deselect()
-					end
-					if systemFrame == MicroMenuContainer then
-						HoldBlock()
-					else
-						ReleaseBlock()
-					end
-				end)
-			end)
+		-- and so does Edit Mode clearing its selection (its dialog closed, a layout change).
+		local function DeselectBlock()
+			if selected then
+				Guarded(Deselect)
+			end
 		end
-		if EditModeManagerFrame and EditModeManagerFrame.ClearSelectedSystem then
-			hooksecurefunc(EditModeManagerFrame, "ClearSelectedSystem", function()
-				Guarded(function()
-					if selected then
-						Deselect()
-					end
-					ReleaseBlock()
-				end)
-			end)
+		for _, name in ipairs({ "SelectSystem", "ClearSelectedSystem" }) do
+			if EditModeManagerFrame and EditModeManagerFrame[name] then
+				hooksecurefunc(EditModeManagerFrame, name, DeselectBlock)
+			end
 		end
 		-- The buttons that throw away unsaved changes: Revert All Changes, and Exit or Switch in the
 		-- dialog that asks about them (EditModeUnsavedChangesDialog). The block reverts just before

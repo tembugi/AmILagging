@@ -1352,52 +1352,29 @@ local function ExitWithoutSaving()
 	end)
 end
 
-Test("in Edit Mode the block lets go of the micro menu: moving the menu leaves it where it was, and it keeps that spot", function()
+Test("in its slot the block moves with the micro menu: the bags bar makes room there and the row grows to the right", function()
 	NewGame()
 	Login()
 	game.callbacks["EditMode.Enter"]()
-	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
 	local point, relativeTo, relativePoint, x, y = BlockAnchor()
-	Equal(point .. " " .. relativePoint .. " " .. tostring(relativeTo == UIParent), "CENTER BOTTOMLEFT true", "standing on its own while the menu is selected")
-	Near(x, ROW_CENTER_X / BAGS_SCALE, "where it stood, x")
-	Near(y, ROW_CENTER_Y / BAGS_SCALE, "where it stood, y")
-	MoveMicroMenu(1400, 300)
-	Equal((BlockAnchor()), "CENTER", "still where it stood after the menu moved")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X, "the bags bar joins the menu again")
-	EditModeManagerFrame:ClearSelectedSystem()
-	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot, x")
-	Near(AmILaggingDB.spot.y, ROW_CENTER_Y, "kept spot, y")
-	point, relativeTo = BlockAnchor()
-	Equal(point .. " " .. tostring(relativeTo == UIParent), "CENTER true", "on its own spot")
-	game.callbacks["EditMode.Exit"]()
-	Equal((BlockAnchor()), "CENTER", "still there after Edit Mode")
-end)
-
-Test("leaving Edit Mode with the micro menu still selected keeps the block where it stood", function()
-	NewGame()
-	Login()
-	game.callbacks["EditMode.Enter"]()
-	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
-	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
-	MoveMicroMenu(1400, 300)
-	game.callbacks["EditMode.Exit"]()
-	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
-	Equal((BlockAnchor()), "CENTER", "on its own spot")
-end)
-
-Test("selecting the micro menu without moving it leaves the block in its place", function()
-	NewGame()
-	Login()
-	game.callbacks["EditMode.Enter"]()
-	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
-	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
-	EditModeManagerFrame:SelectSystem(BagsBar)
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "in its slot")
+	Equal(relativeTo, MicroMenuContainer, "anchored to")
 	Equal(AmILaggingDB.spot, nil, "spot")
-	local point, relativeTo = BlockAnchor()
-	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back by the micro menu")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the row still makes room")
+	Near(OffsetX(MicroMenuContainer, "CENTER"), 1400, "the micro menu stays where it was dropped")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar makes room")
+	Near(OffsetX(MultiBarBottomLeft), GROWTH / 2 / STACKED_BAR_SCALE, "stacked bar centered over the row")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar reaches the row's end")
+	game.callbacks["EditMode.Exit"]()
+	Equal((select(2, BlockAnchor())), MicroMenuContainer, "still in its slot after Edit Mode")
+	-- Back where Blizzard's layout puts it, the row is centered again.
+	ResetMicroMenu()
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the row centered again")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar still makes room")
 end)
+
+
 
 Test("a block on a spot of its own stays there when the micro menu is selected and moved", function()
 	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 300, y = 400 } } end })
@@ -1422,8 +1399,8 @@ Test("a micro menu dropped in Edit Mode stays where the player dropped it, by th
 		EditModeDrag(MicroMenuContainer, point, 400, 300)
 		Equal(MicroMenuContainer:GetNumPoints(), 1, point .. ": points after the drop")
 		Near(OffsetX(MicroMenuContainer, point), 400, point .. ": where it was dropped")
-		Near(OffsetX(BagsBar), BAGS_JOIN_X, point .. ": the bags bar joins the menu again")
-		-- The player clicks something else: the block keeps its spot and everything is laid out again.
+		Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, point .. ": the bags bar makes room")
+		-- The player clicks something else: everything is laid out again.
 		LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 400, 300)
 		EditModeManagerFrame:ClearSelectedSystem()
 		Equal(MicroMenuContainer:GetNumPoints(), 1, point .. ": points later")
@@ -1476,28 +1453,25 @@ Test("a bags bar dragged away in Edit Mode stays where it was dropped", function
 	end
 end)
 
-Test("Revert All Changes, or leaving Edit Mode without saving, puts the block back in the row with the micro menu", function()
+Test("Revert All Changes, or leaving Edit Mode without saving, puts the micro menu back with the block in its slot", function()
 	NewGame()
 	Login()
 	game.callbacks["EditMode.Enter"]()
-	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
 	MoveMicroMenu(1400, 300)
 	ClickRevertAllChanges()
 	Equal(AmILaggingDB.spot, nil, "spot")
 	local point, relativeTo = BlockAnchor()
-	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "in its slot")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the row centered again")
 	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar joins the block")
-	-- Also when the micro menu was let go first.
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
 	MoveMicroMenu(1400, 300)
-	EditModeManagerFrame:ClearSelectedSystem()
-	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
 	ExitWithoutSaving()
-	Equal(AmILaggingDB.spot, nil, "spot after leaving without saving")
-	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row after leaving without saving")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the row centered after leaving without saving")
+	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot after leaving without saving")
 	-- Switch, to a layout with the micro menu elsewhere (SelectLayout: it clears the selection,
-	-- then the other layout places the micro menu): the block stands by the micro menu there.
+	-- then the other layout places the micro menu): the block stands in its slot there.
 	game.callbacks["EditMode.Enter"]()
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
 	MoveMicroMenu(1400, 300)
@@ -1507,33 +1481,10 @@ Test("Revert All Changes, or leaving Edit Mode without saving, puts the block ba
 		MicroMenuContainer:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 100, 10)
 	end)
 	Equal(AmILaggingDB.spot, nil, "spot after switching")
-	local _, standsBy = BlockAnchor()
-	Equal(standsBy == MicroMenuContainer, true, "by the micro menu of the other layout")
+	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot in the other layout")
+	Near(OffsetX(MicroMenuContainer, "BOTTOMLEFT"), 100, "where the other layout puts the micro menu")
 end)
 
-Test("the micro menu's own Reset To Default Position puts the block back in the row, until Edit Mode closes", function()
-	NewGame()
-	Login()
-	game.callbacks["EditMode.Enter"]()
-	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
-	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
-	MoveMicroMenu(1400, 300)
-	EditModeManagerFrame:ClearSelectedSystem()
-	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
-	ResetMicroMenu()
-	Equal(AmILaggingDB.spot, nil, "spot")
-	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar joins the block")
-	-- Once Edit Mode closes with the layout saved, the kept spot is the player's: a layout that
-	-- puts the micro menu back later leaves the block on it.
-	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
-	MoveMicroMenu(1400, 300)
-	EditModeManagerFrame:ClearSelectedSystem()
-	game.callbacks["EditMode.SavedLayouts"]()
-	game.callbacks["EditMode.Exit"]()
-	ResetMicroMenu()
-	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "spot kept after Edit Mode closed")
-end)
 
 Test("Revert All Changes, and leaving or switching layouts without saving, put the block back as it was when Edit Mode opened or the layout was saved", function()
 	NewGame()
@@ -1702,29 +1653,74 @@ Test("broken saved data is dropped and the block stands in the row", function()
 	end
 end)
 
-Test("next to a moved micro menu, the block floats on a free side and nothing on the bar moves", function()
-	-- The bags bar still hangs off the micro menu's right and the action bar off its left:
-	-- neither side is free, so the block stands above the micro menu.
+Test("by a moved micro menu the block stays in its slot, or on the other side or above when its slot is off the screen", function()
 	NewGame({ before = function() game.microMenuMoved = true end })
 	Login()
-	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu")
-	BarAsTheGameSetIt("with the micro menu moved")
-	-- The player moved the bags bar away: the right side is free.
+	local point, relativeTo, relativePoint, x, y = BlockAnchor()
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "in its slot")
+	Equal(relativeTo, MicroMenuContainer, "anchored to")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "the micro menu stays where the player put it")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar makes room")
+	-- Near the screen's right edge the block would fit, but the bags bar making room for it
+	-- wouldn't, and the action bar hangs off the left: the block stands above the micro menu.
+	-- ASSUMED: the bags bar's width, in its own units.
+	BagsBar.width = 200
+	MicroMenuContainer.left, MicroMenuContainer.right = SCREEN_WIDTH - 400, SCREEN_WIDTH - 100
+	MicroMenuContainer:ClearAllPoints()
+	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+	Equal((BlockAnchor()), "BOTTOMRIGHT", "above, with the bags bar")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "the bags bar where Blizzard put it")
+	MicroMenuContainer.left, MicroMenuContainer.right = MICRO_MENU_LEFT, MICRO_MENU_RIGHT
+	MicroMenuContainer:ClearAllPoints()
+	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+	Equal((BlockAnchor()), "BOTTOMLEFT", "in its slot again")
+	-- The player moved the bags bar away: the block keeps its slot and nothing else moves.
 	BagsBar:ClearAllPoints()
 	BagsBar:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
-	local point, relativeTo, relativePoint, x, y = BlockAnchor()
-	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "on the right")
-	Equal(relativeTo, MicroMenuContainer, "anchored to")
-	-- The action bar moved away, then the micro menu moved to the screen's right edge: the
-	-- left side.
-	MainActionBar:ClearAllPoints()
-	MainActionBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 10, 10)
+	Equal((BlockAnchor()), "BOTTOMLEFT", "still in its slot")
+	Equal(OffsetX(BagsBar, "BOTTOMRIGHT"), -10, "bags bar where the player put it")
+	-- The micro menu at the screen's right edge, the action bar still hanging off its left: the
+	-- slot would be off the screen and the left side is taken, so the block stands above it.
 	MicroMenuContainer.left, MicroMenuContainer.right = SCREEN_WIDTH - 310, SCREEN_WIDTH - 10
 	MicroMenuContainer:ClearAllPoints()
 	MicroMenuContainer:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "nothing makes room: XP bar")
+	Near(OffsetX(MultiBarBottomLeft), 0, "nothing makes room: stacked bar")
+	-- Dropped there in Edit Mode, it goes back in that slot: above the micro menu's right end,
+	-- clear of both frame arts (8 and 5), in the block's units.
+	game.callbacks["EditMode.Enter"]()
+	DragTo(300, 400)
+	Equal(AmILaggingDB.spot ~= nil, true, "on a spot of its own")
+	local half = SLOT_SIZE / 2 * BAGS_SCALE
+	DragTo(SCREEN_WIDTH - 10 - half, MICRO_MENU_TOP + (MICRO_MENU_REACH + BAR_REACH_BOTTOM) * BAGS_SCALE + half)
+	Equal(AmILaggingDB.spot, nil, "back in the slot above")
+	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu again")
+	game.callbacks["EditMode.Exit"]()
+	-- The action bar dragged away too: the left side.
+	EditModeDrag(MainActionBar, "BOTTOMLEFT", 10, 10)
 	point, relativeTo, relativePoint, x, y = BlockAnchor()
 	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMRIGHT BOTTOMLEFT -7 -4", "on the left")
 	Equal(OffsetX(BagsBar, "BOTTOMRIGHT"), -10, "bags bar")
+end)
+
+Test("by a moved micro menu, dropping the block by it or Reset To Default Position puts it back in its slot", function()
+	NewGame({ before = function()
+		game.microMenuMoved = true
+		AmILaggingDB = { format = 1, spot = { x = 300, y = 400 } }
+	end })
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	DragTo(ROW_CENTER_X + 10, ROW_CENTER_Y - 10)
+	Equal(AmILaggingDB.spot, nil, "spot after dropping it by the slot")
+	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar makes room")
+	DragTo(300, 400)
+	Near(OffsetX(BagsBar), BAGS_JOIN_X, "the bags bar back where Blizzard put it")
+	ClickBlock()
+	SettingsDialog().reset.onClick()
+	Equal(AmILaggingDB.spot, nil, "spot after Reset To Default Position")
+	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot after Reset To Default Position")
 end)
 
 Test("in the gamepad interface the block can't be dragged in Edit Mode", function()
