@@ -848,8 +848,9 @@ end
 -- the game's words), since the game's own dialog only serves Edit Mode's systems. It opens where
 -- the game's opens for the bags bar (its settings dialog anchor) and can be dragged.
 -- Size: the bags bar's Size slider, as a percentage of the bags bar's size; 100% is the default.
--- Revert Changes: back to the spot and size the block had when Edit Mode opened, as the game's
--- button reverts what changed since the layout was saved. Reset To Default Position: back to
+-- Revert Changes: back to the spot and size the block had when Edit Mode opened or the layout was
+-- last saved, as the game's button reverts what changed since the layout was saved. Reset To
+-- Default Position: back to
 -- where the addon puts it (the row, or next to a moved micro menu); the size stays.
 -- Its measures are read from the game's dialog, which always exists (hidden until it opens for
 -- one of the game's bars): strata and level, padding, title font and place, spacing, the Revert
@@ -901,7 +902,7 @@ end
 
 local dialog, sizeSlider, revertButton, resetButton
 local updatingDialog = false
-local editModeStart -- the spot and size when Edit Mode opened
+local editModeStart -- the spot and size when Edit Mode opened or the layout was last saved
 
 local function CopySpot(spot)
 	return spot and { x = spot.x, y = spot.y }
@@ -1308,6 +1309,26 @@ local function OnEditModeExit()
 	Layout()
 end
 
+-- Edit Mode's Revert All Changes, and leaving Edit Mode or switching layouts without saving, throw
+-- away the player's unsaved changes; the block's go too (the user's choice, 2026-10-06), back to
+-- where it stood when Edit Mode opened or the layout was last saved. Edit Mode also runs its revert
+-- on every exit, saved or not, so the block follows the player's click on those buttons instead.
+local function RevertAll()
+	if not editModeStart then
+		return
+	end
+	menuHold, keptSpot = nil, nil
+	RevertChanges()
+end
+
+-- Saving the layout keeps the block as it is: what Revert Changes and Revert All Changes go back to.
+local function OnLayoutsSaved()
+	if editModeStart then
+		editModeStart = { spot = CopySpot(saved.spot), size = saved.size }
+		UpdateDialog()
+	end
+end
+
 local function SetUp(events)
 	local function Relayout()
 		Guarded(Layout)
@@ -1324,6 +1345,9 @@ local function SetUp(events)
 	end, block)
 	EventRegistry:RegisterCallback("EditMode.Exit", function()
 		Guarded(OnEditModeExit)
+	end, block)
+	EventRegistry:RegisterCallback("EditMode.SavedLayouts", function()
+		Guarded(OnLayoutsSaved)
 	end, block)
 	editModeOpen = EditModeManagerFrame and EditModeManagerFrame:IsEditModeActive() or false
 
@@ -1364,6 +1388,19 @@ local function SetUp(events)
 					ReleaseBlock()
 				end)
 			end)
+		end
+		-- The buttons that throw away unsaved changes: Revert All Changes, and Exit or Switch in the
+		-- dialog that asks about them (EditModeUnsavedChangesDialog). The block reverts just before
+		-- the button's own click, while Edit Mode is still open.
+		for _, button in ipairs({
+			EditModeManagerFrame and EditModeManagerFrame.RevertAllChangesButton or false,
+			EditModeUnsavedChangesDialog and EditModeUnsavedChangesDialog.ProceedButton or false,
+		}) do
+			if button then
+				button:HookScript("PreClick", function()
+					Guarded(RevertAll)
+				end)
+			end
 		end
 		-- Edit Mode sets the new point of a bar the player dropped or moved with the arrow keys, and
 		-- only then marks the bar as moved from its default position. The addon saw the point while

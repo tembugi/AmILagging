@@ -694,6 +694,12 @@ local function NewGame(options)
 			game.LayOutBottomBars()
 		end
 	end
+	-- The buttons that throw away unsaved changes: Revert All Changes (EditModeManager.xml), and
+	-- Exit or Switch in the dialog that asks about them (EditModeDialogs.xml). Their click runs the
+	-- game's revert; the stand-in clicks them with ClickGameButton.
+	EditModeManagerFrame.RevertAllChangesButton = NewRegion(UIParent)
+	EditModeUnsavedChangesDialog = NewRegion(UIParent)
+	EditModeUnsavedChangesDialog.ProceedButton = NewRegion(EditModeUnsavedChangesDialog)
 	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
 		return { interfaceStyle = C_InputInterfaceStyle.GetCurrentStyle() }
@@ -1312,12 +1318,38 @@ end
 -- Edit Mode's Revert All Changes, also what leaving it without saving does (RevertAllChanges):
 -- it clears the selection, then lays out the saved layout again, which puts the micro menu back
 -- where Blizzard's layout puts it.
-local function RevertAllChanges()
-	EditModeManagerFrame:ClearSelectedSystem()
+-- The micro menu's own Reset To Default Position (ResetToDefaultPosition) puts it back the same way.
+local function ResetMicroMenu()
 	game.microMenuMoved = false
 	MicroMenuContainer.centerX, MicroMenuContainer.centerY = 850, 30
 	MicroMenuContainer:ClearAllPoints()
 	MicroMenuContainer:SetPoint("BOTTOM", UIParent, "BOTTOM", 116.5, 6)
+end
+
+local function RevertAllChanges()
+	EditModeManagerFrame:ClearSelectedSystem()
+	ResetMicroMenu()
+end
+
+-- The player clicks one of the game's buttons: its PreClick script, then its own click.
+local function ClickGameButton(button, click)
+	if button.scripts.PreClick then
+		button.scripts.PreClick(button, "LeftButton", false)
+	end
+	click()
+end
+
+local function ClickRevertAllChanges()
+	ClickGameButton(EditModeManagerFrame.RevertAllChangesButton, RevertAllChanges)
+end
+
+-- Leaving Edit Mode with unsaved changes asks first; Exit leaves without saving (HideUIPanel, so
+-- ExitEditMode: RevertAllChanges, then EditMode.Exit).
+local function ExitWithoutSaving()
+	ClickGameButton(EditModeUnsavedChangesDialog.ProceedButton, function()
+		RevertAllChanges()
+		game.callbacks["EditMode.Exit"]()
+	end)
 end
 
 Test("in Edit Mode the block lets go of the micro menu: moving the menu leaves it where it was, and it keeps that spot", function()
@@ -1451,7 +1483,7 @@ Test("Revert All Changes, or leaving Edit Mode without saving, puts the block ba
 	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
 	MoveMicroMenu(1400, 300)
-	RevertAllChanges()
+	ClickRevertAllChanges()
 	Equal(AmILaggingDB.spot, nil, "spot")
 	local point, relativeTo = BlockAnchor()
 	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
@@ -1461,16 +1493,78 @@ Test("Revert All Changes, or leaving Edit Mode without saving, puts the block ba
 	MoveMicroMenu(1400, 300)
 	EditModeManagerFrame:ClearSelectedSystem()
 	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
-	RevertAllChanges()
-	Equal(AmILaggingDB.spot, nil, "spot after a later revert")
-	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row after a later revert")
-	-- Once Edit Mode closes, the kept spot is the player's: a layout that puts the micro menu back
-	-- later leaves the block on it.
+	ExitWithoutSaving()
+	Equal(AmILaggingDB.spot, nil, "spot after leaving without saving")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row after leaving without saving")
+	-- Switch, to a layout with the micro menu elsewhere (SelectLayout: it clears the selection,
+	-- then the other layout places the micro menu): the block stands by the micro menu there.
+	game.callbacks["EditMode.Enter"]()
 	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
 	MoveMicroMenu(1400, 300)
+	ClickGameButton(EditModeUnsavedChangesDialog.ProceedButton, function()
+		EditModeManagerFrame:ClearSelectedSystem()
+		MicroMenuContainer:ClearAllPoints()
+		MicroMenuContainer:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 100, 10)
+	end)
+	Equal(AmILaggingDB.spot, nil, "spot after switching")
+	local _, standsBy = BlockAnchor()
+	Equal(standsBy == MicroMenuContainer, true, "by the micro menu of the other layout")
+end)
+
+Test("the micro menu's own Reset To Default Position puts the block back in the row, until Edit Mode closes", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	LaidOut(ROW_CENTER_X, ROW_CENTER_Y, 850, 30)
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	EditModeManagerFrame:ClearSelectedSystem()
+	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "kept spot")
+	ResetMicroMenu()
+	Equal(AmILaggingDB.spot, nil, "spot")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "the bags bar joins the block")
+	-- Once Edit Mode closes with the layout saved, the kept spot is the player's: a layout that
+	-- puts the micro menu back later leaves the block on it.
+	EditModeManagerFrame:SelectSystem(MicroMenuContainer)
+	MoveMicroMenu(1400, 300)
+	EditModeManagerFrame:ClearSelectedSystem()
+	game.callbacks["EditMode.SavedLayouts"]()
 	game.callbacks["EditMode.Exit"]()
-	RevertAllChanges()
+	ResetMicroMenu()
 	Near(AmILaggingDB.spot.x, ROW_CENTER_X, "spot kept after Edit Mode closed")
+end)
+
+Test("Revert All Changes, and leaving or switching layouts without saving, put the block back as it was when Edit Mode opened or the layout was saved", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	DragTo(300, 400)
+	ClickBlock()
+	MoveSlider(150)
+	ClickRevertAllChanges()
+	Equal(AmILaggingDB.spot, nil, "spot after Revert All Changes")
+	Equal(AmILaggingDB.size, nil, "size after Revert All Changes")
+	Near(game.block.scale, BAGS_SCALE, "the block's scale")
+	Equal(SettingsDialog().frame:IsShown(), false, "its settings closed")
+	-- Saving the layout keeps the block as it is; reverting goes back only that far.
+	DragTo(300, 400)
+	game.callbacks["EditMode.SavedLayouts"]()
+	ClickBlock()
+	Equal(SettingsDialog().revert:IsEnabled(), false, "nothing to revert after saving")
+	DragTo(500, 400)
+	ClickRevertAllChanges()
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "spot after Revert All Changes")
+	-- Exit in the dialog that asks about unsaved changes (also Switch, for another layout).
+	DragTo(600, 400)
+	ExitWithoutSaving()
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "spot after leaving without saving")
+	-- Leaving when the game has nothing unsaved asks nothing: the block's changes stay.
+	game.callbacks["EditMode.Enter"]()
+	DragTo(700, 400)
+	RevertAllChanges()
+	game.callbacks["EditMode.Exit"]()
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "700 400", "spot after leaving")
 end)
 
 local function PressKey(key)
