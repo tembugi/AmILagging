@@ -1,4 +1,4 @@
-## v1.4.0
+## v1.4.1
 
 - In Edit Mode the block stays in its place, easy to grab.
 - Click it in Edit Mode for its settings: a Size slider, Revert Changes and Reset To Default Position.

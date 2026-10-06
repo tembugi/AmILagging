@@ -1217,7 +1217,9 @@ Test("a saved spot puts the block there at login", function()
 	Near(x, 250 / BAGS_SCALE, "x")
 	Near(y, 500 / BAGS_SCALE, "y")
 	Equal(game.block.clamped, true, "kept on the screen")
-	Equal(table.concat(game.block.clampInsets, " "), table.concat({ -BAR_REACH_LEFT, BAR_REACH_RIGHT, BAR_REACH_TOP, -BAR_REACH_BOTTOM }, " "), "its frame art kept on the screen too")
+	-- By its own size, as Edit Mode keeps the game's bars: in the row at the screen's bottom its
+	-- frame art reaches past the edge, and counting the art pushed the block up off the row.
+	Equal(game.block.clampInsets, nil, "frame art counted for the screen's edge")
 end)
 
 Test("the saved data keeps a valid spot and drops everything else", function()

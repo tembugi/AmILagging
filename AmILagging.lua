@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.4.0"
+local VERSION = "1.4.1"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -115,7 +115,9 @@ end
 
 local block = CreateFrame("Frame", nil, UIParent)
 block:EnableMouse(true)
--- The player can drag it in Edit Mode; it always stays on the screen, its frame art included.
+-- The player can drag it in Edit Mode. It always stays on the screen by its own size, as Edit Mode
+-- keeps the game's bars (clampedToScreen): its frame art may reach past the edge like theirs. In
+-- the row at the screen's bottom the art does, so counting it pushed the block up off the row.
 block:SetMovable(true)
 block:SetClampedToScreen(true)
 block:Hide()
@@ -314,7 +316,6 @@ local function DressBlock()
 	barFrame:ClearAllPoints()
 	barFrame:SetPoint("TOPLEFT", block, "TOPLEFT", -art.barReach.left, art.barReach.top)
 	barFrame:SetPoint("BOTTOMRIGHT", block, "BOTTOMRIGHT", art.barReach.right, -art.barReach.bottom)
-	block:SetClampRectInsets(-art.barReach.left, art.barReach.right, art.barReach.top, -art.barReach.bottom)
 	slotFrame:SetAtlas(art.slotFrame)
 	slotFrame:SetSize(art.slotFrameSize, art.slotFrameSize)
 	-- Lay the numbers out again for the new size.
