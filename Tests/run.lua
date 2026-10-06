@@ -98,8 +98,12 @@ local function NewRegion(parent)
 		parent.children[#parent.children + 1] = region
 	end
 
-	-- Setting a point the region already has replaces it; others are kept.
+	-- Setting a point the region already has replaces it; others are kept. Like the game,
+	-- SetPoint(point, x, y) anchors to the parent's same point.
 	function region:SetPoint(point, relativeTo, relativePoint, x, y)
+		if type(relativeTo) == "number" then
+			relativeTo, relativePoint, x, y = nil, nil, relativeTo, relativePoint
+		end
 		point = point:upper()
 		local anchor = { point, relativeTo or self.parent, (relativePoint or point):upper(), x or 0, y or 0 }
 		for i, existing in ipairs(self.points) do
@@ -283,6 +287,9 @@ local function NewRegion(parent)
 		function texture:SetGradient(_, from, to)
 			self.gradient = { from, to }
 		end
+		function texture:SetTexture(file)
+			self.file = file
+		end
 		self.textures[#self.textures + 1] = texture
 		return texture
 	end
@@ -300,6 +307,13 @@ local function NewRegion(parent)
 		end
 		function text:SetTextColor(r, g, b)
 			self.color = { r, g, b }
+		end
+		function text:SetJustifyH(justify)
+			self.justify = justify
+		end
+		-- ASSUMED: one line of text is 16 high; the addon only sizes its dialog with it.
+		function text:GetStringHeight()
+			return 16
 		end
 		-- ASSUMED: each figure is 0.55 of the font size wide (Skurri's figures are close to it).
 		function text:GetStringWidth()
@@ -433,6 +447,7 @@ local function NewGame(options)
 	function GameTooltip:SetText(text)
 		game.tooltip = { text }
 	end
+	game.tooltipShown = false
 	function GameTooltip_SetDefaultAnchor() end
 	function GameTooltip_SetTitle(_, text)
 		game.tooltip = { text }
@@ -459,8 +474,54 @@ local function NewGame(options)
 		local frame = NewRegion(parent)
 		frame.template = template
 		game.frames[#game.frames + 1] = frame
+		template = template or ""
+		-- UIPanelButtonTemplate and UIButtonTemplate (UIButtonTemplate.lua): text, enabled
+		-- state and SetOnClickHandler.
+		if template:find("UIPanelButtonTemplate", 1, true) then
+			frame.enabled = true
+			function frame:SetText(text)
+				self.text = text
+			end
+			function frame:GetText()
+				return self.text
+			end
+			function frame:SetEnabled(enabled)
+				self.enabled = not not enabled
+			end
+			function frame:IsEnabled()
+				return self.enabled
+			end
+			function frame:SetOnClickHandler(handler)
+				self.onClick = handler
+			end
+		end
+		-- MinimalSliderWithSteppersTemplate (MinimalSlider.lua): Init sets the value without telling
+		-- its callbacks; the player moving it tells them the new value.
+		if template:find("MinimalSliderWithSteppersTemplate", 1, true) then
+			frame.MinText, frame.MaxText = frame:CreateFontString(), frame:CreateFontString()
+			frame.callbacks = {}
+			function frame:Init(value, minValue, maxValue, steps, formatters)
+				self.value, self.minValue, self.maxValue, self.steps, self.formatters = value, minValue, maxValue, steps, formatters
+			end
+			function frame:RegisterCallback(event, func, owner)
+				self.callbacks[event] = function(...)
+					func(owner, ...)
+				end
+			end
+		end
 		return frame
 	end
+	MinimalSliderWithSteppersMixin = { Event = { OnValueChanged = "OnValueChanged" }, Label = { Left = 1, Right = 2 } }
+	function CreateMinimalSliderFormatter(_, formatter)
+		return formatter
+	end
+	function FormatPercentage(percentage)
+		return string.format("%d%%", Round(percentage * 100))
+	end
+	HUD_EDIT_MODE_SETTING_BAGS_SIZE = "Size"
+	HUD_EDIT_MODE_RESET_POSITION = "Reset To Default Position"
+	HUD_EDIT_MODE_REVERT_CHANGES = "Revert Changes"
+	HUD_EDIT_MODE_INSTRUCTIONS_CLICK_TO_EDIT = "Click To Edit"
 	-- Applies a nine-slice layout with an art kit (NineSlice.lua); the stand-in keeps the kit.
 	NineSliceUtil = {}
 	function NineSliceUtil.ApplyLayout(container, layout, kit)
@@ -486,6 +547,10 @@ local function NewGame(options)
 	function MicroMenuContainer:IsInDefaultPosition()
 		return not game.microMenuMoved
 	end
+	-- Edit Mode's box over each of its bars (EditModeSystemSelectionBaseTemplate).
+	MicroMenuContainer.Selection = NewRegion(MicroMenuContainer)
+	MicroMenuContainer.Selection:SetFrameStrata("MEDIUM")
+	MicroMenuContainer.Selection:SetFrameLevel(1000)
 	MicroMenu = NewRegion(MicroMenuContainer)
 	MicroMenu.BorderArt = MicroMenu:CreateTexture()
 	MicroMenu.BorderArt:SetPoint("TOPLEFT", MicroMenu, "TOPLEFT", -MICRO_MENU_REACH, MICRO_MENU_REACH)
@@ -496,6 +561,10 @@ local function NewGame(options)
 	BagsBar.scale = BAGS_SCALE
 	BagsBar.level = 52
 	BagsBar:SetPoint(BAGS_ANCHOR_POINT, MicroMenuContainer, BAGS_ANCHOR_RELATIVE_POINT, BAGS_JOIN_X, BAGS_JOIN_Y)
+	-- Where Edit Mode opens a bar's settings (EditModeSystemMixin:SetupSettingsDialogAnchor).
+	function BagsBar:GetSettingsDialogAnchor()
+		return { Get = function() return "BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -250, 200 end }
+	end
 	BagsBar.BorderArt = BagsBar:CreateTexture()
 	BagsBar.BorderArt.atlas = "UI-HUD-ActionBar-Frame"
 	BagsBar.BorderArt:SetPoint("TOPLEFT", BagsBar, "TOPLEFT", -BAR_REACH_LEFT, BAR_REACH_TOP)
@@ -528,7 +597,14 @@ local function NewGame(options)
 	GamepadMainActionBarFrame = NewRegion(UIParent)
 	GamepadMainActionBarFrame.shown = false
 	GamepadMainActionBarFrame.bottom = GAMEPAD_BUTTONS_BOTTOM
-	Enum = { InputDeviceInterfaceType = { Mkb = 0, Gamepad = 1 } }
+	Enum = { InputDeviceInterfaceType = { Mkb = 0, Gamepad = 1 }, EditModeSystem = { MicroMenu = 13, Bags = 14 }, EditModeBagsSetting = { Size = 2 } }
+	-- The bags bar's Size setting (EditModeSettingDisplayInfo.lua).
+	EditModeSettingDisplayInfoManager = {}
+	function EditModeSettingDisplayInfoManager:GetSystemSettingDisplayInfoMap(system)
+		if system == Enum.EditModeSystem.Bags then
+			return { [Enum.EditModeBagsSetting.Size] = { minValue = 75, maxValue = 200, stepSize = 5 } }
+		end
+	end
 	C_InputInterfaceStyle = {}
 	function C_InputInterfaceStyle.GetCurrentStyle()
 		return game.gamepad and Enum.InputDeviceInterfaceType.Gamepad or Enum.InputDeviceInterfaceType.Mkb
@@ -536,6 +612,9 @@ local function NewGame(options)
 	EditModeManagerFrame = {}
 	function EditModeManagerFrame:IsEditModeActive()
 		return game.editMode
+	end
+	function EditModeManagerFrame:SelectSystem(systemFrame)
+		game.selectedSystem = systemFrame
 	end
 	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
@@ -918,34 +997,167 @@ local function BarAsTheGameSetIt(when)
 	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar " .. when)
 end
 
-Test("in Edit Mode the block shows in Edit Mode's box above the micro menu, the bar is the layout's, and it all comes back after", function()
+-- The block's settings dialog and its parts, once the player opened it.
+local function FrameWithTemplate(template, text)
+	for _, frame in ipairs(game.frames) do
+		if frame.template == template and (text == nil or frame.text == text) then
+			return frame
+		end
+	end
+end
+
+local function SettingsDialog()
+	local slider = FrameWithTemplate("MinimalSliderWithSteppersTemplate")
+	return {
+		frame = slider and slider.parent.parent,
+		slider = slider,
+		close = FrameWithTemplate("UIPanelCloseButton"),
+		revert = FrameWithTemplate("UIPanelButtonTemplate, UIButtonTemplate", "Revert Changes"),
+		reset = FrameWithTemplate("UIPanelButtonTemplate, UIButtonTemplate", "Reset To Default Position"),
+	}
+end
+
+local function ClickBlock()
+	game.editBox.scripts.OnMouseDown(game.editBox, "LeftButton")
+end
+
+local function MoveSlider(value)
+	SettingsDialog().slider.callbacks.OnValueChanged(value)
+end
+
+Test("in Edit Mode the block stays in its place in the row, in Edit Mode's box on top of the game's boxes", function()
 	NewGame()
 	Login()
 	game.callbacks["EditMode.Enter"]()
-	Equal(game.block:IsShown(), true, "block shown")
 	local point, relativeTo, relativePoint, x, y = BlockAnchor()
-	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMRIGHT TOPRIGHT 0 " .. (MICRO_MENU_REACH + BAR_REACH_BOTTOM), "above the micro menu")
+	Equal(table.concat({ point, relativePoint, x, y }, " "), "BOTTOMLEFT BOTTOMRIGHT 7 -4", "in the row")
 	Equal(relativeTo, MicroMenuContainer, "anchored to")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "the row keeps its room")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar")
 	Equal(game.editBox:IsShown(), true, "Edit Mode box")
 	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box")
 	Equal(game.editBox.template, "NineSliceCodeTemplate", "the box's template")
-	BarAsTheGameSetIt("in Edit Mode")
+	Equal(game.editBox.strata .. " " .. game.editBox.level, "MEDIUM 1001", "above the game's boxes")
 	game.editBox.scripts.OnEnter(game.editBox)
-	Equal(game.tooltip[1], "Am I Lagging?", "name on mouse over")
+	Equal(table.concat(game.tooltip, "|"), "Am I Lagging?|Click To Edit", "name and hint on mouse over")
 	game.callbacks["EditMode.Exit"]()
 	Equal(game.editBox:IsShown(), false, "Edit Mode box after")
-	point, relativeTo = BlockAnchor()
-	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "back in the row")
-	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after")
-	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar after")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "still in the row")
 end)
 
-Test("starting in Edit Mode shows the block above the micro menu until it closes", function()
+Test("starting in Edit Mode keeps the block in its place", function()
 	NewGame({ before = function() game.editMode = true end })
 	Login()
-	Equal(game.block:IsShown(), true, "block shown")
-	Equal((BlockAnchor()), "BOTTOMRIGHT", "above the micro menu")
-	BarAsTheGameSetIt("in Edit Mode")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "in the row")
+	Equal(game.editBox:IsShown(), true, "Edit Mode box")
+end)
+
+Test("clicking the block in Edit Mode selects it and opens its settings where the game opens the bags bar's", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	Equal(game.editBox.kit, "editmode-actionbar-selected", "the yellow box")
+	local dialog = SettingsDialog()
+	Equal(dialog.frame:IsShown(), true, "settings shown")
+	Equal(dialog.frame.strata, "DIALOG", "dialog strata")
+	local point, relativeTo, relativePoint, x, y = dialog.frame:GetPoint(1)
+	Equal(table.concat({ point, relativePoint, x, y }, " ") .. " " .. tostring(relativeTo == UIParent), "BOTTOMRIGHT BOTTOMRIGHT -250 200 true", "where the game opens the bags bar's")
+	Equal(table.concat({ dialog.slider.value, dialog.slider.minValue, dialog.slider.maxValue, dialog.slider.steps }, " "), "100 75 200 25", "the bags bar's Size slider")
+	Equal(dialog.slider.formatters[MinimalSliderWithSteppersMixin.Label.Right](150), "150%", "shown as a percentage")
+	Equal(dialog.revert:IsEnabled(), false, "nothing to revert")
+	Equal(dialog.reset:IsEnabled(), false, "already in its default place")
+	game.editBox.scripts.OnEnter(game.editBox)
+	Equal(game.tooltipOwner, nil, "no tooltip while selected")
+	dialog.close.scripts.OnClick(dialog.close)
+	Equal(dialog.frame:IsShown(), false, "closed")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box again")
+end)
+
+Test("the size slider resizes the block, the bags bar still joins it the same way, and 100% saves nothing", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	MoveSlider(151)
+	Equal(AmILaggingDB.size, 150, "saved size, on the slider's step")
+	Near(game.block.scale, BAGS_SCALE * 1.5, "the block's scale")
+	-- In UIParent units, from the micro menu's right edge: the bags bar joins the block with the
+	-- overlap it had with the micro menu.
+	local blockScale, bagsScale = BAGS_SCALE * 1.5, BAGS_SCALE
+	local join = BAGS_JOIN_X * bagsScale
+	local overlapBefore = MICRO_MENU_REACH + BAR_REACH_LEFT * bagsScale - join
+	local blockRightArt = join + (SLOT_SIZE + BAR_REACH_RIGHT) * blockScale
+	local bagsLeftArt = OffsetX(BagsBar) * bagsScale - BAR_REACH_LEFT * bagsScale
+	Near(blockRightArt - bagsLeftArt, overlapBefore, "overlap of frame art")
+	local growth = join + (SLOT_SIZE + BAR_REACH_RIGHT) * blockScale - MICRO_MENU_REACH
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - growth / 2, "the row grows evenly")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + growth, "XP bar")
+	local _, _, _, x = BlockAnchor()
+	Near(x, BAGS_JOIN_X / 1.5, "the join, in the block's own units")
+	MoveSlider(100)
+	Equal(AmILaggingDB.size, nil, "100% saved")
+	Near(game.block.scale, BAGS_SCALE, "back to the bags bar's size")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar")
+end)
+
+Test("Revert Changes puts back the spot and size the block had when Edit Mode opened", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 300, y = 400 }, size = 120 } end })
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	MoveSlider(150)
+	DragTo(600, 500)
+	local dialog = SettingsDialog()
+	Equal(dialog.revert:IsEnabled(), true, "something to revert")
+	dialog.revert.onClick()
+	Equal(AmILaggingDB.size, 120, "size")
+	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "spot")
+	Equal(dialog.slider.value, 120, "slider")
+	Equal(dialog.revert:IsEnabled(), false, "nothing left to revert")
+	Near(game.block.scale, BAGS_SCALE * 1.2, "the block's scale")
+	-- After leaving and opening Edit Mode again there is nothing to revert, as in the game.
+	game.callbacks["EditMode.Exit"]()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	Equal(SettingsDialog().revert:IsEnabled(), false, "nothing to revert in a new Edit Mode")
+end)
+
+Test("Reset To Default Position puts the block back where the addon puts it and keeps its size", function()
+	NewGame({ before = function() AmILaggingDB = { format = 1, spot = { x = 300, y = 400 }, size = 150 } end })
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	local dialog = SettingsDialog()
+	Equal(dialog.reset:IsEnabled(), true, "moved, so it can be reset")
+	dialog.reset.onClick()
+	Equal(AmILaggingDB.spot, nil, "spot")
+	Equal(AmILaggingDB.size, 150, "size kept")
+	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row")
+	Equal(dialog.reset:IsEnabled(), false, "nothing left to reset")
+	Equal(dialog.revert:IsEnabled(), true, "the reset can be reverted")
+end)
+
+Test("selecting one of the game's bars, or leaving Edit Mode, closes the block's settings", function()
+	NewGame()
+	Login()
+	game.callbacks["EditMode.Enter"]()
+	ClickBlock()
+	EditModeManagerFrame:SelectSystem(BagsBar)
+	Equal(game.selectedSystem, BagsBar, "the game selected its bar")
+	Equal(SettingsDialog().frame:IsShown(), false, "settings after the game selected its bar")
+	Equal(game.editBox.kit, "editmode-actionbar-highlight", "the blue box")
+	ClickBlock()
+	game.callbacks["EditMode.Exit"]()
+	Equal(SettingsDialog().frame:IsShown(), false, "settings after Edit Mode")
+end)
+
+Test("the saved size is kept only inside the slider's range and when it isn't the default", function()
+	for _, case in ipairs({ { 150, 150 }, { 75, 75 }, { 200, 200 }, { 100, nil }, { 74, nil }, { 201, nil }, { "150", nil }, { 0 / 0, nil } }) do
+		NewGame({ before = function() AmILaggingDB = { format = 1, size = case[1] } end })
+		Login()
+		Equal(AmILaggingDB.size, case[2], "saved " .. tostring(case[1]))
+	end
 end)
 
 Test("dragging the block in Edit Mode floats it where it's dropped, remembers the spot and gives the bar back", function()

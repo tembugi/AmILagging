@@ -1,6 +1,6 @@
 -- Keep equal to ## Version in the .toc. The game reads the .toc only at client start,
 -- so the tooltip uses this, which /reload picks up.
-local VERSION = "1.3.0"
+local VERSION = "1.4.0"
 -- The addon's name as the player sees it: the tooltip title and the start of chat lines.
 local ADDON_TITLE = "Am I Lagging?"
 
@@ -62,23 +62,44 @@ local function SayProblem(problem, advice)
 	print(NORMAL_FONT_COLOR:WrapTextInColorCode(ADDON_TITLE) .. ": " .. RED_FONT_COLOR:WrapTextInColorCode(problem) .. " " .. advice)
 end
 
--- The saved data, per account (AmILaggingDB): where the player put the block in Edit Mode, as
--- the block's center in UIParent units from the screen's bottom left. Without a spot the block
--- stands where the addon puts it. Nothing else is saved.
+-- The saved data, per account (AmILaggingDB), both set in Edit Mode: where the player put the
+-- block, as its center in UIParent units from the screen's bottom left, and its size, as a
+-- percentage of the bags bar's. Without a spot the block stands where the addon puts it;
+-- without a size it is as big as the bags bar. Nothing else is saved.
 local SAVE_FORMAT = 1
+local DEFAULT_SIZE = 100
 local saved = { format = SAVE_FORMAT }
+
+-- The size slider's range and step: the bags bar's own Size setting in Edit Mode, read from the
+-- game's setting list; these are Blizzard's values today, used if the list is missing.
+local function SizeRange()
+	local settings = EditModeSettingDisplayInfoManager and EditModeSettingDisplayInfoManager.GetSystemSettingDisplayInfoMap
+		and Enum.EditModeSystem and Enum.EditModeBagsSetting
+		and EditModeSettingDisplayInfoManager:GetSystemSettingDisplayInfoMap(Enum.EditModeSystem.Bags)
+	local size = settings and settings[Enum.EditModeBagsSetting.Size]
+	if size and size.minValue and size.maxValue and size.stepSize then
+		return size.minValue, size.maxValue, size.stepSize
+	end
+	return 75, 200, 5
+end
 
 local function IsFiniteNumber(value)
 	return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
 end
 
 -- Rebuilds the saved data on every load from the fields the addon uses and drops everything
--- else: a spot stays only when both its numbers are finite.
+-- else: a spot stays only when both its numbers are finite, a size only when it is in the
+-- slider's range and isn't the default.
 local function NormalizeSaved(data)
 	local result = { format = SAVE_FORMAT }
 	local spot = type(data) == "table" and data.spot
 	if type(spot) == "table" and IsFiniteNumber(spot.x) and IsFiniteNumber(spot.y) then
 		result.spot = { x = spot.x, y = spot.y }
+	end
+	local size = type(data) == "table" and data.size
+	local minSize, maxSize = SizeRange()
+	if IsFiniteNumber(size) and size >= minSize and size <= maxSize and size ~= DEFAULT_SIZE then
+		result.size = size
 	end
 	return result
 end
@@ -316,9 +337,10 @@ end
 -- in Edit Mode), the block floats on its own and nothing on the bar moves. In the gamepad
 -- interface the game hides the row; the block then stands on its own, centered between the
 -- gamepad buttons and the XP bar.
--- The layout is never written: Edit Mode anchors these frames again on every layout change,
--- and while Edit Mode is open the moves are taken off, so Edit Mode only ever sees and saves
--- the layout's own positions. Without the addon the bar is exactly as the layout says.
+-- The layout is never written: Edit Mode anchors these frames again on every layout change and
+-- saves only what the player moves, where they drop it; the moves apply only to bars still in
+-- Blizzard's arrangement, also while Edit Mode is open. Without the addon the bar is exactly as
+-- the layout says.
 local editModeOpen = false
 local layoutPending = false
 local rowMovers = {} -- frame -> mover, for the frames moved so far
@@ -566,8 +588,7 @@ end
 
 -- Where the block stands:
 -- "row": in the bottom row, right of the micro menu, while the micro menu is where Blizzard's
---   layout puts it; "aboveMicroMenu" instead while Edit Mode is open, since Edit Mode shows the
---   row without room for the block;
+--   layout puts it, Edit Mode open or not;
 -- "spot": where the player put it in Edit Mode;
 -- "besideMicroMenu": next to a micro menu the player moved, on a side with room;
 -- "aboveXPBar": on its own, centered between the XP bar and the gamepad buttons: in the gamepad
@@ -585,8 +606,6 @@ local function Placement()
 		return "aboveXPBar"
 	elseif not MicroMenuInDefaultPosition() then
 		return "besideMicroMenu"
-	elseif editModeOpen then
-		return "aboveMicroMenu"
 	end
 	return "row"
 end
@@ -618,13 +637,23 @@ local function JoinToMicroMenu()
 		BAGS_ANCHOR_OFFSET_X or 7, BAGS_ANCHOR_OFFSET_Y or -4, false
 end
 
+-- The join's offsets are in the bags bar's units; the block can be another size.
+local function BagsScale()
+	return BagsBar and BagsBar:GetEffectiveScale() or UIParent:GetEffectiveScale()
+end
+
+local function BagsToBlock(value)
+	return value * BagsScale() / block:GetEffectiveScale()
+end
+
 -- How much wider the block makes the row, in UIParent units. The bags join the block as they
--- joined the micro menu, with the same overlap of frame art, so the row grows by the slot and
--- the join x, less the difference between the micro menu's reach and the block's.
+-- joined the micro menu, with the same overlap of frame art, so the row grows by the join x,
+-- the slot and the block's reach, less the micro menu's reach.
 local function RowGrowth(x)
-	local scale = block:GetEffectiveScale()
-	local microMenuReach = art.microMenuReachRight * (MicroMenu and MicroMenu:GetEffectiveScale() or scale) / scale
-	return (art.slotSize + x + art.barReach.right - microMenuReach) * scale / UIParent:GetEffectiveScale()
+	local blockScale = block:GetEffectiveScale()
+	local microMenuScale = MicroMenu and MicroMenu:GetEffectiveScale() or blockScale
+	return ((art.slotSize + art.barReach.right) * blockScale + x * BagsScale()
+		- art.microMenuReachRight * microMenuScale) / UIParent:GetEffectiveScale()
 end
 
 local EDGE_GETTERS = { top = "GetTop", bottom = "GetBottom", left = "GetLeft", right = "GetRight" }
@@ -689,15 +718,16 @@ end
 -- bar doesn't hang there and the block fits, else above it.
 local function SetBesideMicroMenu(point, relativePoint, x, y)
 	local toUIParent = BlockToUIParent()
+	local join = x * BagsScale() / UIParent:GetEffectiveScale()
 	local left, right = EdgeOf(MicroMenuContainer, "left"), EdgeOf(MicroMenuContainer, "right")
-	local rightEnd = right and right + (x + art.slotSize + art.barReach.right) * toUIParent
+	local rightEnd = right and right + join + (art.slotSize + art.barReach.right) * toUIParent
 	if not HangsOffMicroMenu(BagsBar, "RIGHT") and (not rightEnd or rightEnd <= UIParent:GetRight()) then
-		block:SetPoint(point, MicroMenuContainer, relativePoint, x, y)
+		block:SetPoint(point, MicroMenuContainer, relativePoint, BagsToBlock(x), BagsToBlock(y))
 		return
 	end
-	local leftEnd = left and left - (x + art.slotSize + art.barReach.left) * toUIParent
+	local leftEnd = left and left - join - (art.slotSize + art.barReach.left) * toUIParent
 	if not HangsOffMicroMenu(MainActionBar, "LEFT") and (not leftEnd or leftEnd >= 0) then
-		block:SetPoint(Mirrored(point), MicroMenuContainer, Mirrored(relativePoint), -x, y)
+		block:SetPoint(Mirrored(point), MicroMenuContainer, Mirrored(relativePoint), BagsToBlock(-x), BagsToBlock(y))
 		return
 	end
 	SetAboveMicroMenu()
@@ -716,18 +746,19 @@ local function RowCenter()
 	local function Along(name, low, high)
 		return name:find(low) and -1 or name:find(high) and 1 or 0
 	end
-	local toUIParent = BlockToUIParent()
-	local half = art.slotSize / 2 * toUIParent
+	local bagsToUIParent = BagsScale() / UIParent:GetEffectiveScale()
+	local half = art.slotSize / 2 * BlockToUIParent()
 	local anchorX = (left + right) / 2 + Along(relativePoint, "LEFT", "RIGHT") * (right - left) / 2
 	local anchorY = (bottom + top) / 2 + Along(relativePoint, "BOTTOM", "TOP") * (top - bottom) / 2
-	return anchorX + x * toUIParent - Along(point, "LEFT", "RIGHT") * half,
-		anchorY + y * toUIParent - Along(point, "BOTTOM", "TOP") * half
+	return anchorX + x * bagsToUIParent - Along(point, "LEFT", "RIGHT") * half,
+		anchorY + y * bagsToUIParent - Along(point, "BOTTOM", "TOP") * half
 end
 
--- In Edit Mode the block shows as Edit Mode shows the game's bars: a blue box that turns yellow
--- while the player drags it, and its name in a tooltip on mouse over. Edit Mode keeps its box
--- layout to itself (EditModeSystemSelectionLayout, local in EditModeSystemTemplates.lua), so its
--- values are copied here; the art is the game's.
+-- In Edit Mode the block shows as Edit Mode shows the game's bars: a blue box over it, yellow
+-- while it is selected or dragged, above the game's own boxes so it is easy to grab. Mouse over
+-- shows its name and Edit Mode's "Click To Edit"; a click selects it and opens its settings, a
+-- drag moves it. Edit Mode keeps its box layout to itself (EditModeSystemSelectionLayout, local in
+-- EditModeSystemTemplates.lua), so its values are copied here; the art is the game's.
 local EDIT_MODE_BOX_LAYOUT = {
 	TopRightCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = 8, y = 8 },
 	TopLeftCorner = { atlas = "%s-NineSlice-Corner", mirrorLayout = true, x = -8, y = 8 },
@@ -741,24 +772,202 @@ local EDIT_MODE_BOX_LAYOUT = {
 }
 local EDIT_MODE_HIGHLIGHT = "editmode-actionbar-highlight"
 local EDIT_MODE_SELECTED = "editmode-actionbar-selected"
+-- Where Edit Mode's boxes stand (EditModeSystemSelectionBaseTemplate), if no box can be read.
+local EDIT_MODE_BOX_STRATA = "MEDIUM"
+local EDIT_MODE_BOX_LEVEL = 1000
 
 local editBox = CreateFrame("Frame", nil, block, "NineSliceCodeTemplate")
 editBox:SetAllPoints()
 editBox:EnableMouse(true)
 editBox:RegisterForDrag("LeftButton")
 editBox:Hide()
-local dragging = false
+local dragging, selected = false, false
 
 function ShowEditBox(shown)
 	if shown then
-		editBox:SetFrameLevel(block:GetFrameLevel() + 10)
-		local kit = dragging and EDIT_MODE_SELECTED or EDIT_MODE_HIGHLIGHT
+		-- One level above Edit Mode's own boxes, read from the micro menu's.
+		local gameBox = MicroMenuContainer and MicroMenuContainer.Selection
+		editBox:SetFrameStrata(gameBox and gameBox:GetFrameStrata() or EDIT_MODE_BOX_STRATA)
+		editBox:SetFrameLevel((gameBox and gameBox:GetFrameLevel() or EDIT_MODE_BOX_LEVEL) + 1)
+		local kit = (dragging or selected) and EDIT_MODE_SELECTED or EDIT_MODE_HIGHLIGHT
 		if kit ~= editBox.kit then
 			editBox.kit = kit
 			NineSliceUtil.ApplyLayout(editBox, EDIT_MODE_BOX_LAYOUT, kit)
 		end
 	end
 	editBox:SetShown(shown)
+end
+
+-- The block's settings in Edit Mode, built like the game's settings dialog for its bars
+-- (EditModeSystemSettingsDialog in EditModeDialogs.xml: its border, title, close button, slider
+-- row and buttons, with the game's sizes and words), since the game's own dialog only serves
+-- Edit Mode's systems. It opens where the game's opens for the bags bar (its settings dialog
+-- anchor) and can be dragged.
+-- Size: the bags bar's Size slider, as a percentage of the bags bar's size; 100% is the default.
+-- Revert Changes: back to the spot and size the block had when Edit Mode opened, as the game's
+-- button reverts what changed since the layout was saved. Reset To Default Position: back to
+-- where the addon puts it (the row, or next to a moved micro menu); the size stays.
+local DIALOG_PADDING = 20
+local SETTING_ROW_WIDTH, SETTING_ROW_HEIGHT = 343, 32
+local SETTING_LABEL_WIDTH, SLIDER_WIDTH = 100, 200
+local REVERT_BUTTON_WIDTH, EXTRA_BUTTON_WIDTH, BUTTON_HEIGHT = 180, 330, 28
+local DIVIDER_HEIGHT, BUTTON_SPACING, SECTION_SPACING, TITLE_TOP = 16, 2, 12, 15
+
+local dialog, sizeSlider, revertButton, resetButton
+local updatingDialog = false
+local editModeStart -- the spot and size when Edit Mode opened
+
+local function CopySpot(spot)
+	return spot and { x = spot.x, y = spot.y }
+end
+
+local function SameSpot(a, b)
+	if a == nil or b == nil then
+		return a == b
+	end
+	return a.x == b.x and a.y == b.y
+end
+
+local function UpdateButtons()
+	local changed = editModeStart ~= nil
+		and (not SameSpot(saved.spot, editModeStart.spot) or saved.size ~= editModeStart.size)
+	revertButton:SetEnabled(changed)
+	resetButton:SetEnabled(saved.spot ~= nil)
+end
+
+local function ShowAsPercentage(value)
+	return FormatPercentage(value / DEFAULT_SIZE, true)
+end
+
+local function UpdateDialog()
+	if not dialog then
+		return
+	end
+	local minSize, maxSize, step = SizeRange()
+	local formatters = {
+		[MinimalSliderWithSteppersMixin.Label.Right] = CreateMinimalSliderFormatter(MinimalSliderWithSteppersMixin.Label.Right, ShowAsPercentage),
+	}
+	updatingDialog = true
+	sizeSlider:Init(saved.size or DEFAULT_SIZE, minSize, maxSize, (maxSize - minSize) / step, formatters)
+	updatingDialog = false
+	UpdateButtons()
+end
+
+local function OnSizeChanged(value)
+	if updatingDialog then
+		return
+	end
+	local minSize, _, step = SizeRange()
+	value = minSize + Round((value - minSize) / step) * step
+	saved.size = value ~= DEFAULT_SIZE and value or nil
+	Layout()
+	UpdateButtons()
+end
+
+local function RevertChanges()
+	saved.spot = CopySpot(editModeStart.spot)
+	saved.size = editModeStart.size
+	Layout()
+	UpdateDialog()
+end
+
+local function ResetPosition()
+	saved.spot = nil
+	Layout()
+	UpdateDialog()
+end
+
+local function Deselect()
+	selected = false
+	if dialog then
+		dialog:Hide()
+	end
+	ShowEditBox(editBox:IsShown())
+end
+
+local function CreateDialog()
+	dialog = CreateFrame("Frame", nil, UIParent)
+	dialog:SetFrameStrata("DIALOG")
+	dialog:SetFrameLevel(200)
+	dialog:EnableMouse(true)
+	dialog:SetMovable(true)
+	dialog:SetClampedToScreen(true)
+	dialog:RegisterForDrag("LeftButton")
+	dialog:SetScript("OnDragStart", dialog.StartMoving)
+	dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+	dialog:Hide()
+
+	local border = CreateFrame("Frame", nil, dialog, "DialogBorderTranslucentTemplate")
+	border:SetAllPoints()
+
+	local title = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlightLarge")
+	title:SetPoint("TOP", 0, -TITLE_TOP)
+	title:SetText(ADDON_TITLE)
+
+	local closeButton = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
+	closeButton:SetPoint("TOPRIGHT")
+	closeButton:SetScript("OnClick", function()
+		Guarded(Deselect)
+	end)
+
+	local row = CreateFrame("Frame", nil, dialog)
+	row:SetSize(SETTING_ROW_WIDTH, SETTING_ROW_HEIGHT)
+	row:SetPoint("TOP", title, "BOTTOM", 0, -SECTION_SPACING)
+	local label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightMedium")
+	label:SetSize(SETTING_LABEL_WIDTH, SETTING_ROW_HEIGHT)
+	label:SetJustifyH("LEFT")
+	label:SetPoint("LEFT")
+	label:SetText(HUD_EDIT_MODE_SETTING_BAGS_SIZE)
+	sizeSlider = CreateFrame("Frame", nil, row, "MinimalSliderWithSteppersTemplate")
+	sizeSlider:SetSize(SLIDER_WIDTH, SETTING_ROW_HEIGHT)
+	sizeSlider:SetPoint("LEFT", label, "RIGHT", 5, 0)
+	sizeSlider.MinText:Hide()
+	sizeSlider.MaxText:Hide()
+	sizeSlider:RegisterCallback(MinimalSliderWithSteppersMixin.Event.OnValueChanged, function(_, value)
+		Guarded(OnSizeChanged, value)
+	end, dialog)
+
+	revertButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate, UIButtonTemplate")
+	revertButton:SetSize(REVERT_BUTTON_WIDTH, BUTTON_HEIGHT)
+	revertButton:SetPoint("TOPLEFT", row, "BOTTOMLEFT", 0, -SECTION_SPACING)
+	revertButton:SetText(HUD_EDIT_MODE_REVERT_CHANGES)
+	revertButton:SetOnClickHandler(function()
+		Guarded(RevertChanges)
+	end)
+	local divider = dialog:CreateTexture(nil, "ARTWORK")
+	divider:SetTexture("Interface\\FriendsFrame\\UI-FriendsFrame-OnlineDivider")
+	divider:SetSize(EXTRA_BUTTON_WIDTH, DIVIDER_HEIGHT)
+	divider:SetPoint("TOPLEFT", revertButton, "BOTTOMLEFT", 0, -BUTTON_SPACING)
+	resetButton = CreateFrame("Button", nil, dialog, "UIPanelButtonTemplate, UIButtonTemplate")
+	resetButton:SetSize(EXTRA_BUTTON_WIDTH, BUTTON_HEIGHT)
+	resetButton:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -BUTTON_SPACING)
+	resetButton:SetText(HUD_EDIT_MODE_RESET_POSITION)
+	resetButton:SetOnClickHandler(function()
+		Guarded(ResetPosition)
+	end)
+
+	dialog:SetSize(SETTING_ROW_WIDTH + 2 * DIALOG_PADDING, TITLE_TOP + title:GetStringHeight() + SECTION_SPACING
+		+ SETTING_ROW_HEIGHT + SECTION_SPACING + BUTTON_HEIGHT + BUTTON_SPACING + DIVIDER_HEIGHT
+		+ BUTTON_SPACING + BUTTON_HEIGHT + DIALOG_PADDING)
+	local anchor = BagsBar and BagsBar.GetSettingsDialogAnchor and BagsBar:GetSettingsDialogAnchor()
+	if anchor and anchor.Get then
+		local point, relativeTo, relativePoint, x, y = anchor:Get()
+		dialog:SetPoint(point, relativeTo, relativePoint, x, y)
+	else
+		-- Blizzard's default dialog anchor (EditModeSystemMixin:SetupSettingsDialogAnchor).
+		dialog:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -250, 200)
+	end
+end
+
+local function Select()
+	if not dialog then
+		CreateDialog()
+	end
+	selected = true
+	GameTooltip_Hide()
+	UpdateDialog()
+	dialog:Show()
+	ShowEditBox(true)
 end
 
 -- Where the player drops the block: back in its place when dropped by the micro menu's right
@@ -777,11 +986,16 @@ local function OnDropped()
 		saved.spot = { x = x, y = y }
 	end
 	Layout()
+	UpdateDialog()
 end
 
+editBox:SetScript("OnMouseDown", function(_, button)
+	if button == "LeftButton" then
+		Guarded(Select)
+	end
+end)
 editBox:SetScript("OnDragStart", function()
 	Guarded(function()
-		GameTooltip_Hide()
 		dragging = true
 		ShowEditBox(true)
 		block:StartMoving()
@@ -791,8 +1005,12 @@ editBox:SetScript("OnDragStop", function()
 	Guarded(OnDropped)
 end)
 editBox:SetScript("OnEnter", function(self)
+	if selected then
+		return
+	end
 	GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
 	GameTooltip:SetText(ADDON_TITLE)
+	GameTooltip:AddLine(HUD_EDIT_MODE_INSTRUCTIONS_CLICK_TO_EDIT, HIGHLIGHT_FONT_COLOR:GetRGB())
 	GameTooltip:Show()
 end)
 editBox:SetScript("OnLeave", GameTooltip_Hide)
@@ -813,8 +1031,8 @@ function Layout()
 	local rowGrowth, bagsShift = 0, 0
 	block:ClearAllPoints()
 	if placement then
-		-- The block takes the bags bar's size setting and stands on its level.
-		block:SetScale(BagsBar and BagsBar:GetScale() or 1)
+		-- The block takes the bags bar's size setting, times its own size, and stands on its level.
+		block:SetScale((BagsBar and BagsBar:GetScale() or 1) * (saved.size or DEFAULT_SIZE) / DEFAULT_SIZE)
 		if BagsBar then
 			block:SetFrameStrata(BagsBar:GetFrameStrata())
 			block:SetFrameLevel(BagsBar:GetFrameLevel())
@@ -822,15 +1040,13 @@ function Layout()
 	end
 	if placement == "row" then
 		local point, relativePoint, x, y, bagsJoined = JoinToMicroMenu()
-		block:SetPoint(point, MicroMenuContainer, relativePoint, x, y)
+		block:SetPoint(point, MicroMenuContainer, relativePoint, BagsToBlock(x), BagsToBlock(y))
 		rowGrowth = RowGrowth(x)
 		if bagsJoined then
 			bagsShift = rowGrowth
 		end
 	elseif placement == "besideMicroMenu" then
 		SetBesideMicroMenu(JoinToMicroMenu())
-	elseif placement == "aboveMicroMenu" then
-		SetAboveMicroMenu()
 	elseif placement == "spot" then
 		block:SetPoint("CENTER", UIParent, "BOTTOMLEFT", InFrameUnits(saved.spot.x, block), InFrameUnits(saved.spot.y, block))
 	elseif placement == "aboveXPBar" then
@@ -838,6 +1054,9 @@ function Layout()
 	end
 	block:SetShown(placement ~= nil)
 	ShowEditBox(editModeOpen and placement ~= nil and not InGamepadInterface())
+	if selected and not editBox:IsShown() then
+		Deselect()
+	end
 
 	-- Grow evenly: each root of the row moves left by half, once; the bars stacked on it move
 	-- right by half or stretch by the whole growth, and the bags bar moves right by the whole
@@ -879,6 +1098,7 @@ end
 
 local function OnEditModeEnter()
 	editModeOpen = true
+	editModeStart = { spot = CopySpot(saved.spot), size = saved.size }
 	Layout()
 end
 
@@ -886,6 +1106,8 @@ local function OnEditModeExit()
 	if dragging then
 		OnDropped()
 	end
+	Deselect()
+	editModeStart = nil
 	editModeOpen = false
 	MeasureArt()
 	DressBlock()
@@ -920,6 +1142,16 @@ local function SetUp(events)
 		RowMoverFor(MicroMenuContainer)
 		if BagsBar then
 			RowMoverFor(BagsBar)
+		end
+		-- Selecting one of the game's bars in Edit Mode deselects the block, as it does the others.
+		if EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
+			hooksecurefunc(EditModeManagerFrame, "SelectSystem", function()
+				Guarded(function()
+					if selected then
+						Deselect()
+					end
+				end)
+			end)
 		end
 		if MainStatusTrackingBarContainer and CanStretch(MainStatusTrackingBarContainer) then
 			XPBarStateFor(MainStatusTrackingBarContainer)
