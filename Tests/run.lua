@@ -13,12 +13,13 @@
 -- SharedTooltipTemplates.lua and GameTooltip.lua (the tooltip), UIButtonTemplate.lua and
 -- MinimalSlider.lua (its settings), GameFonts.xml and SoundKitConstants.lua. Strings and the
 -- gamepad API are from BlizzardInterfaceResources (enUS), and the widgets have only the methods
--- Forever's widgets have (Tests/WidgetAPI.lua).
+-- Forever's widgets have (Tests/WidgetAPI.lua). In combat the game refuses the addon's code
+-- moving, showing or hiding a protected frame, as the game does (see Combat).
 -- What it assumes beyond the game's code is marked ASSUMED: a stand-in that behaves better than
 -- the game hides bugs.
 
--- This file runs under luajit, outside the game, and uses standard Lua's loadfile and io, which
--- the game doesn't have.
+-- This file runs under luajit, outside the game, and uses standard Lua's loadfile, io and
+-- debug, which the game doesn't have.
 ---@diagnostic disable: undefined-global, lowercase-global
 
 local ADDON_FILE = "AmILagging.lua"
@@ -72,6 +73,7 @@ local NUMBER_FONT_FILE = "Fonts\\skurri.ttf"
 --------------------------------------------------------------------------------
 
 local game -- this test's game: what the addon said, the errors, the ticker and the frames
+local games = {} -- every game the current test played
 
 -- The errors the stand-in makes the game throw on purpose (brokenPoints, moveErrors, net.fail).
 -- The addon's guard reports every error and goes on, so any other error it reports fails the
@@ -92,6 +94,182 @@ for widgetType, names in pairs(dofile("Tests/WidgetAPI.lua")) do
 end
 -- The widget types that are regions: GetChildren leaves them out.
 local REGION_TYPES = { Texture = true, FontString = true }
+
+--------------------------------------------------------------------------------
+-- Combat. While InCombatLockdown() is true, the game refuses a protected frame's protected
+-- methods when the addon's code calls them: the call does nothing and the game reports
+-- ADDON_ACTION_BLOCKED. The stand-in does the same and lists each refusal in game.blocked; the
+-- tests fail on any. ASSUMED: a call is refused whether or not it would change anything.
+--------------------------------------------------------------------------------
+
+-- The protected methods: those wow-ui-source marks IsProtectedFunction (forever,
+-- Blizzard_APIDocumentationGenerated), by the part of the widget API they are in.
+local PROTECTED_API = {
+	-- SimpleScriptRegionAPIDocumentation.lua and SimpleScriptRegionResizingAPIDocumentation.lua
+	ScriptRegion = {
+		"AdjustPointsOffset", "ClearAllPoints", "ClearPoint", "ClearPointsOffset", "EnableMouse",
+		"EnableMouseMotion", "EnableMouseWheel", "FocusEnter", "FocusExit", "MouseDown", "MouseUp",
+		"SetAllPoints", "SetCollapsesLayout", "SetHeight", "SetMouseClickEnabled",
+		"SetMouseMotionEnabled", "SetParent", "SetPassThroughButtons", "SetPoint", "SetPointsOffset",
+		"SetPropagateMouseClicks", "SetPropagateMouseMotion", "SetRoundLayoutToNearestPixel",
+		"SetSize", "SetWidth",
+	},
+	-- SimpleRegionAPIDocumentation.lua
+	Region = { "SetIgnoreParentScale", "SetScale" },
+	-- SimpleFrameAPIDocumentation.lua
+	Frame = {
+		"AddRoleset", "ClearAttribute", "ClearAttributes", "EnableGamePadButton",
+		"EnableGamePadStick", "EnableKeyboard", "Hide", "Lower", "Raise", "RemoveRoleset",
+		"ResizeToBoundsRect", "SetClampRectInsets", "SetClampedToScreen", "SetFixedFrameLevel",
+		"SetFixedFrameStrata", "SetFrameLevel", "SetFrameStrata", "SetHitRectInsets",
+		"SetHyperlinksEnabled", "SetID", "SetIgnoreParentScale", "SetRolesets", "SetScale",
+		"SetShown", "SetToplevel", "SetUsingParentLevel", "Show", "StartMoving", "StartSizing",
+		"StopMovingOrSizing",
+	},
+	-- SimpleButtonAPIDocumentation.lua
+	Button = { "Disable", "Enable", "RegisterForClicks", "RegisterForMouse", "SetEnabled" },
+}
+-- The parts each widget type has (BlizzardInterfaceResources, Resources/WidgetAPI.lua): a
+-- texture's Show, for one, is the region's and not protected.
+local PROTECTED_METHODS = {}
+for widgetType, parts in pairs({
+	Frame = { "ScriptRegion", "Frame" },
+	Slider = { "ScriptRegion", "Frame" },
+	StatusBar = { "ScriptRegion", "Frame" },
+	GameTooltip = { "ScriptRegion", "Frame" },
+	Button = { "ScriptRegion", "Frame", "Button" },
+	Texture = { "ScriptRegion", "Region" },
+	FontString = { "ScriptRegion", "Region" },
+}) do
+	local set = {}
+	for _, part in ipairs(parts) do
+		for _, name in ipairs(PROTECTED_API[part]) do
+			set[name] = true
+		end
+	end
+	PROTECTED_METHODS[widgetType] = set
+end
+
+-- Whether a widget is protected, as IsProtected says. A frame is protected explicitly
+-- (widget.protected: protected="true" in its XML or its template's, as SecureFrameTemplate in
+-- Blizzard_FrameXML/SecureTemplatesBase.xml, which the secure templates inherit), or because a
+-- frame under it is: seen in game (Just the Trees' taint log, 2026-10-17), the action bars,
+-- protected only through their buttons, had SetPoint and ClearAllPoints blocked in combat.
+-- ASSUMED: a texture or text is protected when its frame is (regions have protected methods,
+-- and nothing else could make one protected). Not modeled: a frame that a protected frame is
+-- anchored to (the micro menu, which the action bar hangs off) counting as protected too.
+local function IsProtected(widget)
+	if widget.protected then
+		return true
+	end
+	if not REGION_TYPES[widget.widgetType] then
+		for _, child in ipairs(widget.children) do
+			if not REGION_TYPES[child.widgetType] and IsProtected(child) then
+				return true
+			end
+		end
+		return false
+	end
+	return widget.parent ~= nil and IsProtected(widget.parent)
+end
+
+-- Whose code is calling, as the game taints a run of code. A run is what the game starts: an
+-- event's handler, a frame's script, a timer, a call into Blizzard's code. It is the addon's
+-- from the moment it enters a function from AmILagging.lua to the end of the run, Blizzard's
+-- code it calls on the way included; hooksecurefunc keeps its hook's taint inside the hook. An
+-- event the game sends during a run goes to each handler in a run of its own, which starts with
+-- the outer run's taint and gives none back: seen in game (Just the Trees' taint log,
+-- 2026-10-17), an addon's ADDON_LOADED handler ran inside the player's first open of the talent
+-- window, and nothing after it in that open ran tainted. A call the tests make outside a run is
+-- the addon's when the addon's code is on the stack. Not modeled: taint the addon leaves in
+-- Blizzard's tables for later (the game's taint log finds that).
+local ADDON_SOURCE = "@" .. ADDON_FILE
+
+local function AddonOnStack()
+	local level = 3
+	while true do
+		local info = debug.getinfo(level, "S")
+		if not info then
+			return false
+		end
+		if info.source == ADDON_SOURCE then
+			return true
+		end
+		level = level + 1
+	end
+end
+
+-- In combat, a debug hook marks the run tainted as it enters the addon's code (tail calls too,
+-- which leave no trace on the stack).
+local function OnCall()
+	local run = game.run
+	if run and not run.tainted then
+		local info = debug.getinfo(2, "S")
+		if info and info.source == ADDON_SOURCE then
+			run.tainted = true
+		end
+	end
+end
+
+local function AddonCalling()
+	return (game.run ~= nil and game.run.tainted) or AddonOnStack()
+end
+
+local function EndRun(run, ...)
+	if game.run == run then
+		game.run = nil
+	end
+	return ...
+end
+
+-- Runs func as the game runs code. Within a run, it is part of that run.
+local function GameRun(func, ...)
+	if game.run then
+		return func(...)
+	end
+	local run = { tainted = AddonOnStack() }
+	game.run = run
+	return EndRun(run, func(...))
+end
+
+local function EndRunApart(outer, ...)
+	game.run = outer
+	return ...
+end
+
+-- Runs an event's handler: a run of its own, even within another run.
+local function RunApart(func, ...)
+	local outer = game.run
+	game.run = { tainted = outer and outer.tainted or AddonOnStack() }
+	return EndRunApart(outer, func(...))
+end
+
+-- A hook's taint stays inside the hook (hooksecurefunc; ASSUMED for HookScript too, which the
+-- game also calls a secure hook).
+local function RunHook(hook, ...)
+	local run = game.run
+	local tainted = run and run.tainted
+	hook(...)
+	if run then
+		run.tainted = tainted
+	end
+end
+
+local protectedMethods = {} -- by widget type and name: the method, refused in combat
+local function ProtectedMethod(widgetType, name, method)
+	local byName = protectedMethods[widgetType] or {}
+	protectedMethods[widgetType] = byName
+	if not byName[name] then
+		byName[name] = function(self, ...)
+			if game.combat and IsProtected(self) and AddonCalling() then
+				game.blocked[#game.blocked + 1] = (self.name or "a protected " .. widgetType) .. ":" .. name .. "()"
+				return
+			end
+			return method(self, ...)
+		end
+	end
+	return byName[name]
+end
 
 local function Mixin(object, ...)
 	for index = 1, select("#", ...) do
@@ -178,7 +356,11 @@ local WidgetMeta = {
 		if not WIDGET_METHODS[widgetType][key] then
 			return nil
 		end
-		return (widgetType == "GameTooltip" and TooltipWidget[key]) or Widget[key] or NotPlayed(widgetType, key)
+		local method = (widgetType == "GameTooltip" and TooltipWidget[key]) or Widget[key] or NotPlayed(widgetType, key)
+		if PROTECTED_METHODS[widgetType] and PROTECTED_METHODS[widgetType][key] then
+			return ProtectedMethod(widgetType, key, method)
+		end
+		return method
 	end,
 }
 
@@ -207,6 +389,9 @@ end
 
 function Widget:GetObjectType()
 	return self.widgetType
+end
+function Widget:IsProtected()
+	return IsProtected(self), self.protected == true
 end
 
 -- Setting a point the region already has replaces it; others are kept. Like the game,
@@ -401,7 +586,7 @@ function Widget:HookScript(name, func)
 		if old then
 			old(...)
 		end
-		func(...)
+		RunHook(func, ...)
 	end
 end
 function Widget:RegisterEvent(event)
@@ -762,6 +947,10 @@ end
 local function NewGame(options)
 	options = options or {}
 	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, tooltip = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0, microMenuMoved = false }
+	-- What the game refused the addon in combat (ADDON_ACTION_BLOCKED), and the run going on.
+	game.blocked, game.run = {}, nil
+	games[#games + 1] = game
+	debug.sethook() -- a test that failed in combat may have left the hook on
 	-- The saved data as the game loads it before the addon's code runs; a test sets it in before().
 	AmILaggingDB = nil
 
@@ -803,9 +992,11 @@ local function NewGame(options)
 		local original = owner[name]
 		assert(type(original) == "function", "hooksecurefunc: no function " .. tostring(name))
 		owner[name] = function(...)
-			local results = { original(...) }
-			hook(...)
-			return unpack(results)
+			return GameRun(function(...)
+				local results = { original(...) }
+				RunHook(hook, ...)
+				return unpack(results)
+			end, ...)
 		end
 	end
 	function InCombatLockdown()
@@ -861,6 +1052,7 @@ local function NewGame(options)
 	end
 
 	UIParent = NewWidget("Frame", nil)
+	UIParent.name = "UIParent"
 	UIParent.scale = UI_SCALE
 	UIParent.left, UIParent.bottom, UIParent.right, UIParent.top = 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT
 
@@ -970,6 +1162,7 @@ local function NewGame(options)
 	MicroMenu.BorderArt:SetPoint("TOPLEFT", MicroMenu, "TOPLEFT", -MICRO_MENU_REACH, MICRO_MENU_REACH)
 	MicroMenu.BorderArt:SetPoint("BOTTOMRIGHT", MicroMenu, "BOTTOMRIGHT", MICRO_MENU_REACH, -MICRO_MENU_REACH)
 	MainActionBar = EditModeSystem(UIParent)
+	MainActionBar.name = "MainActionBar"
 	MainActionBar:SetPoint("BOTTOMRIGHT", MicroMenuContainer, "BOTTOMLEFT", -4.5, -4)
 	function MainActionBar:IsInDefaultPosition()
 		return not game.actionBarMoved
@@ -1001,10 +1194,23 @@ local function NewGame(options)
 	MainStatusTrackingBarContainer = NewXPBarContainer()
 	for _, name in ipairs({ "MultiBarBottomRight", "MultiBarBottomLeft", "StanceBar", "PetActionBar", "PossessActionBar" }) do
 		_G[name] = EditModeSystem(UIParent)
+		_G[name].name = name
 		_G[name].scale = STACKED_BAR_SCALE
 	end
 	MainMenuBarVehicleLeaveButton = EditModeSystem(UIParent, "Button")
+	MainMenuBarVehicleLeaveButton.name = "MainMenuBarVehicleLeaveButton"
 	MainMenuBarVehicleLeaveButton.scale = STACKED_BAR_SCALE
+	-- The action bars' buttons make the bars protected (see Combat). ActionBar_OnLoad
+	-- (Blizzard_ActionBar/Shared/ActionBar.lua) puts each button in a container frame on its
+	-- bar; the buttons' templates inherit SecureActionButtonTemplate (MainBarActionBarButtonTemplate,
+	-- MultiBar<n>ButtonTemplate through ActionBarButtonTemplate, StanceButtonTemplate,
+	-- PetActionButtonTemplate, PossessButtonTemplate). Cut to one button a bar; a Button stands in
+	-- for the CheckButton. The vehicle exit button is a plain Button (VehicleLeaveButton.xml).
+	for _, bar in ipairs({ MainActionBar, MultiBarBottomRight, MultiBarBottomLeft, StanceBar, PetActionBar, PossessActionBar }) do
+		local button = NewWidget("Button", NewWidget("Frame", bar))
+		button.name = bar.name .. "Button1"
+		button.protected = true
+	end
 	-- UpdateBottomActionBarPositions places each of them again, cleared and set, and the action bar
 	-- too while it is in its default position (SetToLayoutAnchor).
 	function game.LayOutBottomBars()
@@ -1023,8 +1229,14 @@ local function NewGame(options)
 
 	-- The gamepad interface: the gamepad action bars' frame, hidden until the game switches.
 	GamepadMainActionBarFrame = NewWidget("Frame", UIParent)
+	GamepadMainActionBarFrame.name = "GamepadMainActionBarFrame"
 	GamepadMainActionBarFrame.shown = false
 	GamepadMainActionBarFrame.bottom = GAMEPAD_BUTTONS_BOTTOM
+	-- Its buttons are protected (GamepadActionBarButtonTemplate, from SecureActionButtonTemplate:
+	-- Blizzard_GamepadActionBars/ActionBarButton.xml). Cut to one.
+	local gamepadButton = NewWidget("Button", GamepadMainActionBarFrame)
+	gamepadButton.name = "GamepadMainActionBarFrameButton1"
+	gamepadButton.protected = true
 	Enum = { InputDeviceInterfaceType = { Mkb = 0, Gamepad = 1 }, EditModeSystem = { MicroMenu = 13, Bags = 14 }, EditModeBagsSetting = { Size = 2 } }
 	-- The bags bar's Size setting (EditModeSettingDisplayInfo.lua).
 	EditModeSettingDisplayInfoManager = {}
@@ -1122,7 +1334,7 @@ local function NewGame(options)
 	if options.before then
 		options.before()
 	end
-	assert(loadfile(ADDON_FILE))("AmILagging", {})
+	GameRun(assert(loadfile(ADDON_FILE)), "AmILagging", {})
 	-- The addon's frames, in the order it makes them: the block, then its event frame.
 	game.block = game.frames[1]
 	game.fpsText, game.worldText = game.block.fontStrings[1], game.block.fontStrings[2]
@@ -1135,9 +1347,23 @@ end
 local function FireEvent(event)
 	for _, frame in ipairs(game.frames) do
 		if frame.events[event] and frame.scripts.OnEvent then
-			frame.scripts.OnEvent(frame, event)
+			RunApart(frame.scripts.OnEvent, frame, event)
 		end
 	end
+end
+
+-- Combat, as the game has it: PLAYER_REGEN_DISABLED, then InCombatLockdown() is true until
+-- combat ends, then PLAYER_REGEN_ENABLED. ASSUMED: the game sends PLAYER_REGEN_DISABLED just
+-- before the lockdown starts and PLAYER_REGEN_ENABLED just after it ends.
+local function EnterCombat()
+	FireEvent("PLAYER_REGEN_DISABLED")
+	game.combat = true
+	debug.sethook(OnCall, "c")
+end
+local function LeaveCombat()
+	game.combat = false
+	debug.sethook()
+	FireEvent("PLAYER_REGEN_ENABLED")
 end
 
 local function Login()
@@ -1145,7 +1371,7 @@ local function Login()
 end
 
 local function Tick()
-	game.ticker.func()
+	GameRun(game.ticker.func)
 end
 
 local function OffsetX(frame, point)
@@ -1195,9 +1421,18 @@ local failures = 0
 
 local function Test(name, func)
 	unplannedErrors = {}
+	games = {}
 	local ok, problem = pcall(func)
 	if ok and #unplannedErrors > 0 then
 		ok, problem = false, "the addon reported an error the test didn't plan: " .. unplannedErrors[1]
+	end
+	-- Whatever the test checks, it fails if the game refused the addon anything in combat.
+	for _, played in ipairs(games) do
+		if #played.blocked > 0 then
+			problem = "ADDON_ACTION_BLOCKED in combat: " .. table.concat(played.blocked, ", ") .. (ok and "" or "; then " .. tostring(problem))
+			ok = false
+			break
+		end
 	end
 	if ok then
 		io.write("ok    " .. name .. "\n")
@@ -2198,17 +2433,72 @@ end)
 Test("in combat every change waits for the end of combat", function()
 	NewGame()
 	Login()
-	game.combat = true
+	EnterCombat()
 	MicroMenu:Hide()
 	Equal(game.block:IsShown(), true, "block in combat")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu in combat")
 	MainStatusTrackingBarContainer:SetWidth(600)
 	Equal(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar in combat")
-	game.combat = false
-	FireEvent("PLAYER_REGEN_ENABLED")
+	LeaveCombat()
 	Equal((BlockAnchor()), "CENTER", "block floats after combat (no micro menu)")
 	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5, "micro menu after combat")
 	Near(MainStatusTrackingBarContainer:GetWidth(), 600, "XP bar after combat")
+end)
+
+-- In combat the game refuses the addon's code moving, showing or hiding a protected frame (see
+-- Combat); any refusal fails the test (see Test). The game's own changes in combat reach every
+-- hook and event of the addon, which leaves the bar as the game set it until combat ends.
+Test("in combat the addon's hooks and events move nothing, and the row is laid out once combat ends", function()
+	NewGame()
+	Login()
+	EnterCombat()
+	-- Blizzard lays out the bottom bars again (a pet bar shown or hidden in combat) and resizes
+	-- the XP bar; the micro menu and the bags bar hide and show; the interface switches and back;
+	-- the numbers tick; the player points at the block.
+	GameRun(game.LayOutBottomBars)
+	GameRun(MainStatusTrackingBarContainer.SetWidth, MainStatusTrackingBarContainer, XP_BAR_WIDTH)
+	GameRun(MicroMenu.Hide, MicroMenu)
+	GameRun(MicroMenu.Show, MicroMenu)
+	GameRun(BagsBar.Hide, BagsBar)
+	GameRun(BagsBar.Show, BagsBar)
+	GameRun(SwitchToGamepad)
+	GameRun(SwitchToKeyboard)
+	Tick()
+	GameRun(game.block.scripts.OnEnter, game.block)
+	GameRun(game.block.scripts.OnLeave, game.block)
+	Equal(game.block:IsShown(), true, "block in combat")
+	Near(OffsetX(MultiBarBottomLeft), 0, "stacked bar where Blizzard put it, in combat")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH, "XP bar as Blizzard sized it, in combat")
+	LeaveCombat()
+	local point, relativeTo = BlockAnchor()
+	Equal(point .. " " .. tostring(relativeTo == MicroMenuContainer), "BOTTOMLEFT true", "block in the row after combat")
+	Near(OffsetX(MicroMenuContainer, "BOTTOM"), 116.5 - GROWTH / 2, "micro menu after combat")
+	Near(OffsetX(MultiBarBottomLeft), GROWTH / 2 / STACKED_BAR_SCALE, "stacked bar after combat")
+	Near(MainStatusTrackingBarContainer:GetWidth(), XP_BAR_WIDTH + GROWTH, "XP bar after combat")
+	Near(OffsetX(BagsBar), BAGS_JOIN_X + GROWTH_IN_BAGS_UNITS, "bags bar after combat")
+	Equal(#game.chat .. " " .. #game.errors, "0 0", "chat lines and errors")
+end)
+
+Test("the stand-in refuses the addon moving a protected bar in combat, and only the addon", function()
+	NewGame()
+	Login()
+	-- Code the stand-in counts as the addon's: a chunk named after its file.
+	local function AddonCode(code)
+		return assert(load(code, "@" .. ADDON_FILE))
+	end
+	local moveBars = AddonCode("MainActionBar:SetPointBase('BOTTOM', UIParent, 'BOTTOM', 0, 0) MultiBarBottomLeft:SetPoint('BOTTOMLEFT', MainActionBar, 'BOTTOMLEFT', 0, 0) UIParent:Hide()")
+	EnterCombat()
+	moveBars()
+	Equal(table.concat(game.blocked, ", "), "MainActionBar:SetPoint(), MultiBarBottomLeft:SetPoint(), UIParent:Hide()", "the addon in combat")
+	Equal(UIParent:IsShown(), true, "the refused Hide did nothing")
+	game.blocked = {}
+	AddonCode("MicroMenuContainer:SetPointBase('BOTTOM', UIParent, 'BOTTOM', 0, 6) BagsBar:Hide() BagsBar:Show()")()
+	Equal(#game.blocked, 0, "frames that aren't protected, in combat")
+	MainActionBar:SetPointBase("BOTTOM", UIParent, "BOTTOM", 0, 0)
+	Equal(#game.blocked, 0, "Blizzard's code in combat")
+	LeaveCombat()
+	moveBars()
+	Equal(#game.blocked, 0, "after combat")
 end)
 
 -- ASSUMED: how another addon hides the bags bar. Parenting a Blizzard bar to a hidden frame of
