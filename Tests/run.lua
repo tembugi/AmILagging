@@ -8,8 +8,12 @@
 -- micro menu's frame art), EditModeUtil.lua and EditModePresetLayoutConstants.lua (how the row
 -- hangs together), EditModeSystemTemplates.lua (SetPointBase), EditModeManager.lua (how bars are
 -- stacked), MainActionBar.lua (what the gamepad interface hides), the gamepad action bars'
--- MainActionBarFrame.xml and StatusTrackingBarConstants.lua. Strings and the gamepad API are from
--- BlizzardInterfaceResources (enUS).
+-- MainActionBarFrame.xml, StatusTrackingBarConstants.lua and StatusTrackingManagerOverrides.lua
+-- (the XP bar). Around them, what the addon calls: Color.lua, FormattingUtil.lua,
+-- SharedTooltipTemplates.lua and GameTooltip.lua (the tooltip), UIButtonTemplate.lua and
+-- MinimalSlider.lua (its settings), GameFonts.xml and SoundKitConstants.lua. Strings and the
+-- gamepad API are from BlizzardInterfaceResources (enUS), and the widgets have only the methods
+-- Forever's widgets have (Tests/WidgetAPI.lua).
 -- What it assumes beyond the game's code is marked ASSUMED: a stand-in that behaves better than
 -- the game hides bugs.
 
@@ -58,8 +62,10 @@ local UI_SCALE = 0.9
 local BAGS_SCALE = 0.8
 local STACKED_BAR_SCALE = 1.25
 local XP_BAR_WIDTH = 571
--- ASSUMED: the number of tick-mark segments on the XP bar.
+-- The XP bar's tick marks split it in 20 (STATUS_BAR_NUM_SEGMENTS, StatusTrackingBarConstants.lua).
 local XP_BAR_SEGMENTS = 20
+-- The number font's file (GameFonts.xml, NumberFont_Outline_Huge).
+local NUMBER_FONT_FILE = "Fonts\\skurri.ttf"
 
 --------------------------------------------------------------------------------
 -- The stand-in
@@ -67,14 +73,64 @@ local XP_BAR_SEGMENTS = 20
 
 local game -- this test's game: what the addon said, the errors, the ticker and the frames
 
+-- The errors the stand-in makes the game throw on purpose (brokenPoints, moveErrors, net.fail).
+-- The addon's guard reports every error and goes on, so any other error it reports fails the
+-- test: a call the game refuses would otherwise pass unseen.
+local PLANNED_ERRORS = { "points failed", "move failed", "no stats" }
+local unplannedErrors = {}
+
+-- The methods each widget type has in Forever (Tests/WidgetAPI.lua), and the type names
+-- CreateFrame takes in any case.
+local WIDGET_METHODS, WIDGET_TYPES = {}, {}
+for widgetType, names in pairs(dofile("Tests/WidgetAPI.lua")) do
+	local set = {}
+	for _, name in ipairs(names) do
+		set[name] = true
+	end
+	WIDGET_METHODS[widgetType] = set
+	WIDGET_TYPES[widgetType:lower()] = widgetType
+end
+-- The widget types that are regions: GetChildren leaves them out.
+local REGION_TYPES = { Texture = true, FontString = true }
+
+local function Mixin(object, ...)
+	for index = 1, select("#", ...) do
+		for key, value in pairs((select(index, ...))) do
+			object[key] = value
+		end
+	end
+	return object
+end
+
+-- Colors: ColorMixin and CreateColor (Blizzard_SharedXMLBase/Color.lua), cut to what the addon
+-- uses. WrapTextInColorCode hands the work to C_ColorUtil.WrapTextInColor; ASSUMED: that writes
+-- |c, the alpha and RGB in hex, the text and |r.
+local ColorMixin = {}
+function ColorMixin:OnLoad(r, g, b, a)
+	self:SetRGBA(r, g, b, a)
+end
+function ColorMixin:GetRGB()
+	return self.r, self.g, self.b
+end
+function ColorMixin:GetRGBA()
+	return self.r, self.g, self.b, self.a
+end
+function ColorMixin:SetRGBA(r, g, b, a)
+	self.r = r
+	self.g = g
+	self.b = b
+	self.a = a or 1
+end
+function ColorMixin:WrapTextInColorCode(text)
+	local function Byte(value)
+		return math.floor(value * 255 + 0.5)
+	end
+	return string.format("|c%02x%02x%02x%02x%s|r", Byte(self.a), Byte(self.r), Byte(self.g), Byte(self.b), text)
+end
+
 local function CreateColorTable(r, g, b, a)
-	local color = { r = r, g = g, b = b, a = a or 1 }
-	function color:GetRGB()
-		return self.r, self.g, self.b
-	end
-	function color:WrapTextInColorCode(text)
-		return string.format("|c%02x%02x%02x%s|r", self.r * 255, self.g * 255, self.b * 255, text)
-	end
+	local color = Mixin({}, ColorMixin)
+	color:OnLoad(r, g, b, a)
 	return color
 end
 
@@ -94,273 +150,548 @@ local function VisibilityChanged(region, visible)
 	end
 end
 
-local function NewRegion(parent)
-	local region = { points = {}, width = 0, height = 0, scale = 1, shown = true, parent = parent, children = {}, scripts = {}, events = {}, textures = {}, fontStrings = {} }
-	if parent then
-		parent.children[#parent.children + 1] = region
-	end
+--------------------------------------------------------------------------------
+-- Widgets. A widget has only the methods its type has in Forever: any other is nil, and calling
+-- it fails as in the game. The methods below do what the game does with what the tests look at;
+-- a Forever method the stand-in doesn't play fails too, so no test passes on a guess. Blizzard's
+-- own Lua methods (mixins, Edit Mode's SetPoint) are set on the widget itself, as the game's
+-- templates do.
+--------------------------------------------------------------------------------
 
-	-- Setting a point the region already has replaces it; others are kept. Like the game,
-	-- SetPoint(point, x, y) anchors to the parent's same point.
-	function region:SetPoint(point, relativeTo, relativePoint, x, y)
-		if type(relativeTo) == "number" then
-			relativeTo, relativePoint, x, y = nil, nil, relativeTo, relativePoint
+local Widget = {} -- the methods, for every type that has them
+local TooltipWidget = {} -- GameTooltip's own lines and owner
+local notPlayed = {}
+
+local function NotPlayed(widgetType, name)
+	local key = widgetType .. ":" .. name
+	if not notPlayed[key] then
+		notPlayed[key] = function()
+			error("the stand-in doesn't play " .. key, 2)
 		end
-		point = point:upper()
-		local anchor = { point, relativeTo or self.parent, (relativePoint or point):upper(), x or 0, y or 0 }
-		for i, existing in ipairs(self.points) do
-			if existing[1] == point then
-				self.points[i] = anchor
-				return
-			end
+	end
+	return notPlayed[key]
+end
+
+local WidgetMeta = {
+	__index = function(widget, key)
+		local widgetType = rawget(widget, "widgetType")
+		if not WIDGET_METHODS[widgetType][key] then
+			return nil
 		end
-		self.points[#self.points + 1] = anchor
+		return (widgetType == "GameTooltip" and TooltipWidget[key]) or Widget[key] or NotPlayed(widgetType, key)
+	end,
+}
+
+local function NewWidget(widgetType, parent)
+	assert(WIDGET_METHODS[widgetType], "a widget type not in Tests/WidgetAPI.lua: " .. tostring(widgetType))
+	local widget = setmetatable({
+		widgetType = widgetType,
+		parent = parent,
+		children = {},
+		shown = true,
+		enabled = true,
+		points = {},
+		width = 0,
+		height = 0,
+		scale = 1,
+		scripts = {},
+		events = {},
+		textures = {},
+		fontStrings = {},
+	}, WidgetMeta)
+	if parent then
+		parent.children[#parent.children + 1] = widget
 	end
-	function region:ClearAllPoints()
-		self.points = {}
+	return widget
+end
+
+function Widget:GetObjectType()
+	return self.widgetType
+end
+
+-- Setting a point the region already has replaces it; others are kept. Like the game,
+-- SetPoint(point, x, y) anchors to the parent's same point.
+function Widget:SetPoint(point, relativeTo, relativePoint, x, y)
+	if type(relativeTo) == "number" then
+		relativeTo, relativePoint, x, y = nil, nil, relativeTo, relativePoint
 	end
-	function region:GetNumPoints()
-		return #self.points
+	point = point:upper()
+	local anchor = { point, relativeTo or self.parent, (relativePoint or point):upper(), x or 0, y or 0 }
+	for i, existing in ipairs(self.points) do
+		if existing[1] == point then
+			self.points[i] = anchor
+			return
+		end
 	end
-	function region:GetPoint(index)
-		local anchor = self.points[index or 1]
-		if anchor then
+	self.points[#self.points + 1] = anchor
+end
+function Widget:ClearAllPoints()
+	self.points = {}
+end
+-- ASSUMED: SetAllPoints replaces the region's points with its TOPLEFT and BOTTOMRIGHT on the
+-- other region's (the parent's by default).
+function Widget:SetAllPoints(relativeTo)
+	relativeTo = relativeTo or self.parent
+	self.points = { { "TOPLEFT", relativeTo, "TOPLEFT", 0, 0 }, { "BOTTOMRIGHT", relativeTo, "BOTTOMRIGHT", 0, 0 } }
+end
+function Widget:GetNumPoints()
+	return #self.points
+end
+function Widget:GetPoint(index)
+	local anchor = self.points[index or 1]
+	if anchor then
+		return unpack(anchor)
+	end
+end
+-- ASSUMED: brokenPoints makes reading points fail, to see what the addon does when the game
+-- keeps failing under it.
+function Widget:GetPointByName(name)
+	if game.brokenPoints then
+		error("points failed")
+	end
+	for _, anchor in ipairs(self.points) do
+		if anchor[1] == name then
 			return unpack(anchor)
 		end
 	end
-	-- ASSUMED: brokenPoints makes reading points fail, to see what the addon does when the game
-	-- keeps failing under it.
-	function region:GetPointByName(name)
-		if game.brokenPoints then
-			error("points failed")
-		end
-		for _, anchor in ipairs(self.points) do
-			if anchor[1] == name then
-				return unpack(anchor)
+end
+function Widget:SetSize(width, height)
+	self.width, self.height = width, height
+end
+function Widget:SetWidth(width)
+	self.width = width
+end
+function Widget:SetHeight(height)
+	self.height = height
+end
+function Widget:GetWidth()
+	return self.width
+end
+function Widget:GetHeight()
+	return self.height
+end
+function Widget:SetScale(scale)
+	self.scale = scale
+end
+function Widget:GetScale()
+	return self.scale
+end
+function Widget:GetEffectiveScale()
+	return self.scale * (self.parent and self.parent:GetEffectiveScale() or 1)
+end
+-- ASSUMED: the stand-in doesn't lay frames out; a test gives a frame its edges in its own
+-- units when the addon reads them.
+function Widget:GetTop()
+	return self.top
+end
+function Widget:GetBottom()
+	return self.bottom
+end
+function Widget:GetLeft()
+	return self.left
+end
+function Widget:GetRight()
+	return self.right
+end
+-- ASSUMED: where a dragged frame ends up is set by the test, as the client moves it under the
+-- mouse.
+function Widget:GetCenter()
+	return self.centerX, self.centerY
+end
+function Widget:SetMovable(movable)
+	self.movable = movable
+end
+function Widget:SetClampedToScreen(clamped)
+	self.clamped = clamped
+end
+function Widget:SetClampRectInsets(left, right, top, bottom)
+	self.clampInsets = { left, right, top, bottom }
+end
+function Widget:RegisterForDrag(button)
+	self.dragButton = button
+end
+function Widget:EnableMouse(enabled)
+	self.mouse = enabled
+end
+function Widget:EnableKeyboard(enabled)
+	self.keyboard = enabled
+end
+function Widget:SetPropagateKeyboardInput(propagate)
+	self.propagate = propagate
+end
+-- The client refuses to move a frame that isn't movable.
+function Widget:StartMoving()
+	assert(self.movable, "Frame is not movable")
+	self.moving = true
+end
+function Widget:StopMovingOrSizing()
+	self.moving = false
+end
+function Widget:SetFrameStrata(strata)
+	self.strata = strata
+end
+function Widget:GetFrameStrata()
+	return self.strata or "MEDIUM"
+end
+function Widget:SetFrameLevel(level)
+	self.level = level
+end
+function Widget:GetFrameLevel()
+	return self.level or 0
+end
+function Widget:SetAlpha(alpha)
+	self.alpha = alpha
+end
+function Widget:DesaturateHierarchy(desaturation)
+	self.desaturation = desaturation
+end
+function Widget:IsShown()
+	return self.shown
+end
+function Widget:IsVisible()
+	return self.shown and (not self.parent or self.parent:IsVisible())
+end
+function Widget:GetParent()
+	return self.parent
+end
+function Widget:SetParent(newParent)
+	local wasVisible = self:IsVisible()
+	if self.parent then
+		for i, child in ipairs(self.parent.children) do
+			if child == self then
+				table.remove(self.parent.children, i)
+				break
 			end
 		end
 	end
-	function region:SetAllPoints() end
-	function region:SetSize(width, height)
-		self.width, self.height = width, height
+	self.parent = newParent
+	if newParent then
+		newParent.children[#newParent.children + 1] = self
 	end
-	function region:SetWidth(width)
-		self.width = width
+	if self:IsVisible() ~= wasVisible then
+		VisibilityChanged(self, not wasVisible)
 	end
-	function region:GetWidth()
-		return self.width
+end
+function Widget:SetShown(shown)
+	shown = not not shown
+	if shown == self.shown then
+		return
 	end
-	function region:GetHeight()
-		return self.height
+	local wasVisible = self:IsVisible()
+	self.shown = shown
+	if self:IsVisible() ~= wasVisible then
+		VisibilityChanged(self, not wasVisible)
 	end
-	function region:SetScale(scale)
-		self.scale = scale
-	end
-	function region:GetScale()
-		return self.scale
-	end
-	function region:GetEffectiveScale()
-		return self.scale * (self.parent and self.parent:GetEffectiveScale() or 1)
-	end
-	-- ASSUMED: the stand-in doesn't lay frames out; a test gives a frame its edges in its own
-	-- units when the addon reads them.
-	function region:GetTop()
-		return self.top
-	end
-	function region:GetBottom()
-		return self.bottom
-	end
-	function region:GetLeft()
-		return self.left
-	end
-	function region:GetRight()
-		return self.right
-	end
-	-- ASSUMED: where a dragged frame ends up is set by the test, as the client moves it under the
-	-- mouse.
-	function region:GetCenter()
-		return self.centerX, self.centerY
-	end
-	function region:SetMovable(movable)
-		self.movable = movable
-	end
-	function region:SetClampedToScreen(clamped)
-		self.clamped = clamped
-	end
-	function region:SetClampRectInsets(left, right, top, bottom)
-		self.clampInsets = { left, right, top, bottom }
-	end
-	function region:RegisterForDrag(button)
-		self.dragButton = button
-	end
-	function region:EnableKeyboard(enabled)
-		self.keyboard = enabled
-	end
-	function region:SetPropagateKeyboardInput(propagate)
-		self.propagate = propagate
-	end
-	-- The client refuses to move a frame that isn't movable.
-	function region:StartMoving()
-		assert(self.movable, "Frame is not movable")
-		self.moving = true
-	end
-	function region:StopMovingOrSizing()
-		self.moving = false
-	end
-	function region:SetFrameStrata(strata)
-		self.strata = strata
-	end
-	function region:GetFrameStrata()
-		return self.strata or "MEDIUM"
-	end
-	function region:SetFrameLevel(level)
-		self.level = level
-	end
-	function region:GetFrameLevel()
-		return self.level or 0
-	end
-	function region:IsShown()
-		return self.shown
-	end
-	function region:IsVisible()
-		return self.shown and (not self.parent or self.parent:IsVisible())
-	end
-	function region:GetParent()
-		return self.parent
-	end
-	function region:SetParent(newParent)
-		local wasVisible = self:IsVisible()
-		if self.parent then
-			for i, child in ipairs(self.parent.children) do
-				if child == self then
-					table.remove(self.parent.children, i)
-					break
-				end
-			end
+end
+function Widget:Show()
+	self:SetShown(true)
+end
+function Widget:Hide()
+	self:SetShown(false)
+end
+function Widget:SetScript(name, func)
+	self.scripts[name] = func
+end
+function Widget:GetScript(name)
+	return self.scripts[name]
+end
+function Widget:HookScript(name, func)
+	local old = self.scripts[name]
+	self.scripts[name] = function(...)
+		if old then
+			old(...)
 		end
-		self.parent = newParent
-		if newParent then
-			newParent.children[#newParent.children + 1] = self
-		end
-		if self:IsVisible() ~= wasVisible then
-			VisibilityChanged(self, not wasVisible)
+		func(...)
+	end
+end
+function Widget:RegisterEvent(event)
+	self.events[event] = true
+end
+function Widget:UnregisterEvent(event)
+	self.events[event] = nil
+end
+-- The child frames, without textures and font strings, as the game's GetChildren.
+function Widget:GetChildren()
+	local frames = {}
+	for _, child in ipairs(self.children) do
+		if not REGION_TYPES[child.widgetType] then
+			frames[#frames + 1] = child
 		end
 	end
-	function region:SetShown(shown)
-		shown = not not shown
-		if shown == self.shown then
-			return
+	return unpack(frames)
+end
+function Widget:CreateTexture()
+	local texture = NewWidget("Texture", self)
+	self.textures[#self.textures + 1] = texture
+	return texture
+end
+function Widget:CreateFontString(_, _, template)
+	assert(template == nil or _G[template], "a font the stand-in lacks: " .. tostring(template))
+	local text = NewWidget("FontString", self)
+	text.fontObject = template and _G[template]
+	text.setTexts, text.setFonts = 0, 0
+	self.fontStrings[#self.fontStrings + 1] = text
+	return text
+end
+
+-- Textures.
+function Widget:SetColorTexture(r, g, b, a)
+	self.colorTexture = { r, g, b, a }
+end
+function Widget:SetAtlas(atlas)
+	self.atlas = atlas
+end
+function Widget:GetAtlas()
+	return self.atlas
+end
+function Widget:SetGradient(_, from, to)
+	self.gradient = { from, to }
+end
+function Widget:SetTexture(file)
+	self.file = file
+end
+function Widget:GetTexture()
+	return self.file
+end
+
+-- Font strings and fonts. A button's text is its own.
+function Widget:SetFont(font, size, flags)
+	self.font = { font, size, flags }
+	self.setFonts = (self.setFonts or 0) + 1
+end
+function Widget:GetFont()
+	if self.font then
+		return unpack(self.font)
+	end
+end
+function Widget:SetText(value)
+	self.text = value ~= nil and tostring(value) or nil
+	self.setTexts = (self.setTexts or 0) + 1
+end
+function Widget:GetText()
+	return self.text
+end
+function Widget:SetTextColor(r, g, b)
+	self.color = { r, g, b }
+end
+function Widget:SetJustifyH(justify)
+	self.justify = justify
+end
+-- A font object, or its name. ASSUMED: GetFontObject gives the font object either way.
+function Widget:SetFontObject(font)
+	self.fontObject = type(font) == "string" and _G[font] or font
+end
+function Widget:GetFontObject()
+	return self.fontObject
+end
+-- ASSUMED: one line of text is 16 high; the addon only sizes its dialog with it.
+function Widget:GetStringHeight()
+	return 16
+end
+-- ASSUMED: each figure is 0.55 of the font size wide (Skurri's figures are close to it).
+function Widget:GetStringWidth()
+	return #(self.text or "") * 0.55 * self.font[2]
+end
+
+-- Buttons.
+function Widget:SetEnabled(enabled)
+	self.enabled = not not enabled
+end
+function Widget:IsEnabled()
+	return self.enabled
+end
+function Widget:GetNormalTexture()
+	return self.normalTexture
+end
+
+-- Sliders. ASSUMED: a slider keeps its value inside its range, starts at 0 in a range of 0 to 0,
+-- and runs OnValueChanged whenever its value changes, with whether the player moved it.
+local function SetSliderValue(slider, value, userInput)
+	value = math.min(math.max(value, slider.minValue), slider.maxValue)
+	if value == slider.value then
+		return
+	end
+	slider.value = value
+	local script = slider.scripts.OnValueChanged
+	if script then
+		script(slider, value, userInput)
+	end
+end
+function Widget:SetMinMaxValues(minValue, maxValue)
+	self.minValue, self.maxValue = minValue, maxValue
+	SetSliderValue(self, self.value, false)
+end
+function Widget:GetMinMaxValues()
+	return self.minValue, self.maxValue
+end
+function Widget:SetValueStep(step)
+	self.valueStep = step
+end
+function Widget:GetValueStep()
+	return self.valueStep
+end
+function Widget:SetValue(value)
+	SetSliderValue(self, value, false)
+end
+function Widget:GetValue()
+	return self.value
+end
+
+-- The tooltip's lines are game.tooltip, its owner game.tooltipOwner.
+function TooltipWidget:SetOwner(owner)
+	game.tooltipOwner = owner
+end
+function TooltipWidget:ClearLines()
+	game.tooltip = {}
+end
+function TooltipWidget:AddLine(text)
+	game.tooltip[#game.tooltip + 1] = text
+end
+function TooltipWidget:SetText(text)
+	game.tooltip = { text }
+end
+
+--------------------------------------------------------------------------------
+-- Blizzard's templates and mixins the addon makes frames from or calls.
+--------------------------------------------------------------------------------
+
+-- UIButtonTemplate's mixin (UIButtonTemplate.xml and UIButtonTemplate.lua), cut to the click: its
+-- OnClick script plays the click sound and runs the handler.
+local UIButtonMixin = {}
+function UIButtonMixin:OnClick(...)
+	PlaySound(self.onClickSoundKit or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+
+	if self.onClickHandler then
+		self.onClickHandler(self, ...)
+	end
+end
+function UIButtonMixin:SetOnClickHandler(onClickHandler, onClickSoundKit)
+	self.onClickHandler = onClickHandler
+	self.onClickSoundKit = onClickSoundKit
+end
+
+-- MinimalSliderWithSteppersTemplate (MinimalSlider.xml and MinimalSlider.lua): the slider, its
+-- steppers and labels, and its mixin's Init, FormatValue and stepper states. Cut: OnLoad (the
+-- steppers' clicks, the slider's mouse scripts, narration). Its callbacks stand in for
+-- CallbackRegistryMixin (CallbackRegistry.lua): one callback per event, called with its owner
+-- first; the secure calls are cut.
+local STEPPER_DISABLED_ALPHA = 0.5
+
+local function NoModification(value)
+	return value
+end
+
+local function CreateMinimalSliderFormatterCopy(_, value)
+	local formatter = nil
+	if value == nil then
+		formatter = NoModification
+	elseif type(value) == "function" then
+		formatter = value
+	else
+		-- Ignores the control value and returns the function argument instead.
+		formatter = function()
+			return value
 		end
-		local wasVisible = self:IsVisible()
-		self.shown = shown
-		if self:IsVisible() ~= wasVisible then
-			VisibilityChanged(self, not wasVisible)
-		end
 	end
-	function region:Show()
-		self:SetShown(true)
-	end
-	function region:Hide()
-		self:SetShown(false)
-	end
-	function region:SetScript(name, func)
-		self.scripts[name] = func
-	end
-	function region:HookScript(name, func)
-		local old = self.scripts[name]
-		self.scripts[name] = function(...)
-			if old then
-				old(...)
-			end
-			func(...)
-		end
-	end
-	function region:RegisterEvent(event)
-		self.events[event] = true
-	end
-	function region:UnregisterEvent(event)
-		self.events[event] = nil
-	end
-	function region:EnableMouse() end
-	-- The child frames, without textures and font strings, as the game's GetChildren.
-	function region:GetChildren()
-		local frames = {}
-		for _, child in ipairs(self.children) do
-			if not child.isRegion then
-				frames[#frames + 1] = child
-			end
-		end
-		return unpack(frames)
+	return formatter
+end
+
+local SliderMixin = {
+	Event = { OnValueChanged = "OnValueChanged", OnInteractStart = "OnInteractStart", OnInteractEnd = "OnInteractEnd" },
+	Label = { Left = 1, Right = 2, Top = 3, Min = 4, Max = 5 },
+}
+
+local function SetStepperButtonEnabled(button, enabled)
+	button:SetEnabled(enabled)
+	button:SetAlpha(enabled and 1.0 or STEPPER_DISABLED_ALPHA)
+	button:DesaturateHierarchy(enabled and 0 or 1)
+end
+
+function SliderMixin:UpdateStepperStates()
+	if not self:IsSliderEnabled() then
+		return
 	end
 
-	function region:CreateTexture()
-		local texture = NewRegion(self)
-		texture.isRegion = true
-		function texture:SetColorTexture() end
-		function texture:SetAtlas(atlas)
-			self.atlas = atlas
-		end
-		function texture:GetAtlas()
-			return self.atlas
-		end
-		function texture:SetGradient(_, from, to)
-			self.gradient = { from, to }
-		end
-		function texture:SetTexture(file)
-			self.file = file
-		end
-		function texture:GetTexture()
-			return self.file
-		end
-		self.textures[#self.textures + 1] = texture
-		return texture
+	local value = self.Slider:GetValue()
+	local minValue, maxValue = self.Slider:GetMinMaxValues()
+	local step = self.Slider:GetValueStep()
+	local atMin = value <= minValue + (step * 0.5)
+	local atMax = value >= maxValue - (step * 0.5)
+	SetStepperButtonEnabled(self.Back, not atMin)
+	SetStepperButtonEnabled(self.Forward, not atMax)
+end
+
+function SliderMixin:Init(value, minValue, maxValue, steps, formatters)
+	self.Slider:SetMinMaxValues(minValue, maxValue)
+	self.Slider:SetValueStep((maxValue - minValue) / steps)
+	self.Slider:SetValue(value)
+
+	self.formatters = formatters
+	self:FormatValue(value)
+	self:UpdateStepperStates()
+
+	local function OnValueChanged(_, newValue)
+		self:FormatValue(newValue)
+		self:UpdateStepperStates()
+
+		self:TriggerEvent(MinimalSliderWithSteppersMixin.Event.OnValueChanged, newValue)
+	end
+	self.Slider:SetScript("OnValueChanged", OnValueChanged)
+end
+
+function SliderMixin:FormatValue(value)
+	if not self.formatters then
+		return
 	end
 
-	function region:CreateFontString()
-		local text = NewRegion(self)
-		text.isRegion = true
-		text.setTexts, text.setFonts = 0, 0
-		function text:SetFont(font, size, flags)
-			self.font = { font, size, flags }
-			self.setFonts = self.setFonts + 1
+	for labelID, formatter in pairs(self.formatters) do
+		local label = self.Labels[labelID]
+		if label then
+			label:SetText(formatter(value))
+			label:Show()
 		end
-		function text:SetText(value)
-			self.text = tostring(value)
-			self.setTexts = self.setTexts + 1
-		end
-		function text:SetTextColor(r, g, b)
-			self.color = { r, g, b }
-		end
-		function text:SetJustifyH(justify)
-			self.justify = justify
-		end
-		function text:SetFontObject(fontObject)
-			self.fontObject = fontObject
-		end
-		function text:GetFontObject()
-			return self.fontObject
-		end
-		-- ASSUMED: one line of text is 16 high; the addon only sizes its dialog with it.
-		function text:GetStringHeight()
-			return 16
-		end
-		-- ASSUMED: each figure is 0.55 of the font size wide (Skurri's figures are close to it).
-		function text:GetStringWidth()
-			return #(self.text or "") * 0.55 * self.font[2]
-		end
-		self.fontStrings[#self.fontStrings + 1] = text
-		return text
 	end
+end
 
-	return region
+function SliderMixin:IsSliderEnabled()
+	return self.sliderEnabled ~= false
+end
+
+function SliderMixin:RegisterCallback(event, func, owner)
+	self.callbacks[event] = function(...)
+		func(owner, ...)
+	end
+end
+
+function SliderMixin:TriggerEvent(event, ...)
+	local callback = self.callbacks[event]
+	if callback then
+		callback(...)
+	end
+end
+
+local function MakeMinimalSliderWithSteppers(frame)
+	Mixin(frame, SliderMixin)
+	frame.callbacks = {}
+	frame.Slider = NewWidget("Slider", frame)
+	frame.Slider.value, frame.Slider.minValue, frame.Slider.maxValue, frame.Slider.valueStep = 0, 0, 0, 0
+	frame.Back = NewWidget("Button", frame)
+	frame.Forward = NewWidget("Button", frame)
+	frame.Labels = {}
+	for _, key in ipairs({ "LeftText", "RightText", "TopText", "MinText", "MaxText" }) do
+		local label = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		label.shown = false
+		frame[key] = label
+		frame.Labels[#frame.Labels + 1] = label
+	end
 end
 
 -- The frames Edit Mode manages keep their own SetPoint as SetPointBase and get Edit Mode's
 -- SetPoint in its place (EditModeSystemMixin:OnSystemLoad). Edit Mode's version also updates
 -- snapping; the stand-in only passes the point on. ASSUMED: moveErrors makes the next moves
 -- fail, to see what the addon does when the game breaks under it.
-local function EditModeSystem(parent)
-	local frame = NewRegion(parent)
+local function EditModeSystem(parent, widgetType)
+	local frame = NewWidget(widgetType or "Frame", parent)
 	local setPoint = frame.SetPoint
 	function frame:SetPointBase(...)
 		if game.moveErrors > 0 then
@@ -381,10 +712,19 @@ end
 
 local function NewXPBarContainer()
 	local container = EditModeSystem(UIParent)
-	container.width = XP_BAR_WIDTH
+	container.width, container.height = XP_BAR_WIDTH, XP_BAR_HEIGHT
+	-- StatusTrackingBarContainerMixin:ResizeContainerBars (StatusTrackingManagerOverrides.lua);
+	-- the stand-in counts the calls.
 	container.resized = 0
 	function container:ResizeContainerBars()
 		self.resized = self.resized + 1
+		local barWidth = self:GetWidth() - STATUS_BAR_SIZE_ADJUSTMENT
+		local barHeight = self:GetHeight() - STATUS_BAR_SIZE_ADJUSTMENT
+
+		for _, bar in ipairs(self.bars) do
+			bar:SetSize(barWidth, barHeight)
+			bar.StatusBar:SetSize(barWidth, barHeight)
+		end
 	end
 	-- Blizzard's UpdateDividers hands the tick marks back to its pool and takes them out again; the
 	-- pool's counters are secure values, so a call from the addon taints them (taint log,
@@ -393,22 +733,27 @@ local function NewXPBarContainer()
 	function container:UpdateDividers()
 		self.dividerUpdates = self.dividerUpdates + 1
 	end
+	-- STATUS_BAR_NUM_SEGMENTS with mouse and keyboard; the stand-in stretches the XP bar only there.
 	function container:GetExpectedSegments()
 		return XP_BAR_SEGMENTS
 	end
 	-- What UpdateDividers left: the tick marks, frames hung by their left on the container's left,
 	-- evenly spread; a released one, hidden without points (Pool_HideAndClearAnchors); and a bar,
-	-- hung by its bottom left, 1 right and STATUS_BAR_SIZE_ADJUSTMENT - 1 up (Camelot: 3)
-	-- (StatusTrackingManagerOverrides.lua). The pool hands marks out last released first, so the
-	-- frames' order says nothing about their place: here they are made right to left.
+	-- hung by its bottom left, 1 right and STATUS_BAR_SIZE_ADJUSTMENT - 1 up, with its status bar
+	-- (StatusTrackingManagerOverrides.lua, StatusTrackingBarTemplate.xml). The pool hands marks out
+	-- last released first, so the frames' order says nothing about their place: here they are
+	-- made right to left.
 	container.dividerFrames = {}
 	for i = XP_BAR_SEGMENTS - 1, 1, -1 do
-		local divider = NewRegion(container)
+		local divider = NewWidget("Frame", container)
 		divider:SetPoint("LEFT", container, "LEFT", XP_BAR_WIDTH / XP_BAR_SEGMENTS * i, 0)
 		container.dividerFrames[i] = divider
 	end
-	NewRegion(container).shown = false
-	NewRegion(container):SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 1, 2)
+	NewWidget("Frame", container).shown = false
+	local bar = NewWidget("Frame", container)
+	bar:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", 1, STATUS_BAR_SIZE_ADJUSTMENT - 1)
+	bar.StatusBar = NewWidget("StatusBar", bar)
+	container.bars = { bar }
 	return container
 end
 
@@ -416,7 +761,7 @@ end
 -- then the addon loaded. Options change the game before the addon loads.
 local function NewGame(options)
 	options = options or {}
-	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0, microMenuMoved = false }
+	game = { chat = {}, errors = {}, frames = {}, callbacks = {}, tooltip = {}, combat = false, editMode = false, net = { home = 50, world = 80 }, fps = 60, cpuBound = true, gamepad = false, moveErrors = 0, microMenuMoved = false }
 	-- The saved data as the game loads it before the addon's code runs; a test sets it in before().
 	AmILaggingDB = nil
 
@@ -443,11 +788,20 @@ local function NewGame(options)
 		return math.floor(value + 0.5)
 	end
 	function CallErrorHandler(message)
-		game.errors[#game.errors + 1] = tostring(message)
+		message = tostring(message)
+		game.errors[#game.errors + 1] = message
+		for _, planned in ipairs(PLANNED_ERRORS) do
+			if message:find(planned, 1, true) then
+				return
+			end
+		end
+		unplannedErrors[#unplannedErrors + 1] = message
 	end
-	-- hooksecurefunc runs the hook after the original, with the same arguments.
+	-- hooksecurefunc runs the hook after the original, with the same arguments. ASSUMED: it
+	-- refuses a function that isn't there.
 	function hooksecurefunc(owner, name, hook)
 		local original = owner[name]
+		assert(type(original) == "function", "hooksecurefunc: no function " .. tostring(name))
 		owner[name] = function(...)
 			local results = { original(...) }
 			hook(...)
@@ -464,7 +818,8 @@ local function NewGame(options)
 	function PlaySound(soundKit)
 		game.sounds[#game.sounds + 1] = soundKit
 	end
-	SOUNDKIT = { IG_MAINMENU_CLOSE = 851 }
+	-- SoundKitConstants.lua.
+	SOUNDKIT = { IG_MAINMENU_CLOSE = 851, IG_MAINMENU_OPTION_CHECKBOX_ON = 856 }
 	function GetNetStats()
 		if game.net.fail then
 			error("no stats")
@@ -484,31 +839,71 @@ local function NewGame(options)
 	HIGHLIGHT_FONT_COLOR = CreateColor(1, 1, 1)
 	GRAY_FONT_COLOR = CreateColor(0.5, 0.5, 0.5)
 	STANDARD_TEXT_FONT = "Fonts\\FRIZQT__.TTF"
-	NumberFont_Outline_Huge = { GetFont = function() return "Fonts\\SKURRI.TTF", 30, "THICKOUTLINE" end }
 	MAINMENUBAR_FPS_LABEL = "Framerate: %.0f fps"
 	MAINMENUBAR_LATENCY_LABEL = "Latency:\n%.0f ms (home)\n%.0f ms (world)"
+	PERCENTAGE_STRING = "%d%%"
+	HUD_EDIT_MODE_SETTING_BAGS_SIZE = "Size"
+	HUD_EDIT_MODE_RESET_POSITION = "Reset To Default Position"
+	HUD_EDIT_MODE_REVERT_CHANGES = "Revert Changes"
+	HUD_EDIT_MODE_INSTRUCTIONS_CLICK_TO_EDIT = "Click To Edit"
+	-- StatusTrackingBarConstants.lua (Camelot).
+	STATUS_BAR_SIZE_ADJUSTMENT = 3
 
-	game.tooltip = {}
-	GameTooltip = {}
-	function GameTooltip:AddLine(text)
-		game.tooltip[#game.tooltip + 1] = text
+	-- FormattingUtil.lua.
+	function FormatPercentage(percentage, roundToNearestInteger)
+		if roundToNearestInteger then
+			percentage = Round(percentage * 100)
+		else
+			percentage = percentage * 100
+		end
+
+		return PERCENTAGE_STRING:format(percentage)
 	end
-	function GameTooltip:Show() end
-	function GameTooltip:SetOwner(owner)
-		game.tooltipOwner = owner
+
+	UIParent = NewWidget("Frame", nil)
+	UIParent.scale = UI_SCALE
+	UIParent.left, UIParent.bottom, UIParent.right, UIParent.top = 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT
+
+	-- Fonts (GameFonts.xml and the shared font files). NumberFont_Outline_Huge: Skurri, 30, with a
+	-- normal outline for Latin alphabets. ASSUMED: GetFont gives the file as GameFonts.xml names it.
+	NumberFont_Outline_Huge = NewWidget("Font", nil)
+	NumberFont_Outline_Huge.font = { NUMBER_FONT_FILE, 30, "OUTLINE" }
+	GameFontNormal = NewWidget("Font", nil)
+	GameFontHighlightMedium = NewWidget("Font", nil)
+	GameFontHighlightLarge = NewWidget("Font", nil)
+
+	-- The game's tooltip and the helpers the addon fills it with (SharedTooltipTemplates.lua;
+	-- GameTooltip_Hide from GameTooltip.lua). Cut: the default anchor's place by the tooltip
+	-- container, and hiding the battle pet tooltip.
+	GameTooltip = NewWidget("GameTooltip", UIParent)
+	GameTooltip.shown = false
+	function GameTooltip_SetDefaultAnchor(tooltip, parent)
+		tooltip:SetOwner(parent, "ANCHOR_NONE")
 	end
-	function GameTooltip:SetText(text)
-		game.tooltip = { text }
+	function GameTooltip_AddBlankLinesToTooltip(tooltip, numLines)
+		if numLines ~= nil then
+			for _ = 1, numLines do
+				tooltip:AddLine(" ")
+			end
+		end
 	end
-	game.tooltipShown = false
-	function GameTooltip_SetDefaultAnchor() end
-	function GameTooltip_SetTitle(_, text)
-		game.tooltip = { text }
+	function GameTooltip_AddBlankLineToTooltip(tooltip)
+		GameTooltip_AddBlankLinesToTooltip(tooltip, 1)
 	end
-	function GameTooltip_AddBlankLineToTooltip()
-		game.tooltip[#game.tooltip + 1] = " "
+	function GameTooltip_AddColoredLine(tooltip, text, color, wrap, leftOffset)
+		local r, g, b = color:GetRGB()
+		if wrap == nil then
+			wrap = true
+		end
+		tooltip:AddLine(text, r, g, b, wrap, leftOffset)
 	end
-	function GameTooltip_Hide() end
+	function GameTooltip_SetTitle(tooltip, text, overrideColor, wrap)
+		tooltip:ClearLines()
+		GameTooltip_AddColoredLine(tooltip, text, overrideColor or HIGHLIGHT_FONT_COLOR, wrap)
+	end
+	function GameTooltip_Hide()
+		GameTooltip:Hide()
+	end
 
 	C_Timer = {}
 	function C_Timer.NewTicker(_, func)
@@ -523,67 +918,33 @@ local function NewGame(options)
 	function EventRegistry:RegisterCallback(event, func)
 		game.callbacks[event] = func
 	end
-	function CreateFrame(_, _, parent, template)
-		local frame = NewRegion(parent)
+	-- CreateFrame makes a widget of the type it is given, with the templates' mixins and scripts
+	-- the addon uses (UIButtonTemplate, MinimalSliderWithSteppersTemplate); the other templates
+	-- add nothing the addon touches.
+	function CreateFrame(frameType, _, parent, template)
+		local frame = NewWidget(WIDGET_TYPES[frameType:lower()] or frameType, parent)
 		frame.template = template
 		game.frames[#game.frames + 1] = frame
-		template = template or ""
-		-- UIPanelButtonTemplate and UIButtonTemplate (UIButtonTemplate.lua): text, enabled
-		-- state and SetOnClickHandler.
-		if template:find("UIPanelButtonTemplate", 1, true) then
-			frame.enabled = true
-			function frame:SetText(text)
-				self.text = text
-			end
-			function frame:GetText()
-				return self.text
-			end
-			function frame:SetEnabled(enabled)
-				self.enabled = not not enabled
-			end
-			function frame:IsEnabled()
-				return self.enabled
-			end
-			function frame:SetOnClickHandler(handler)
-				self.onClick = handler
-			end
+		local templates = {}
+		for name in (template or ""):gmatch("[^,%s]+") do
+			templates[name] = true
 		end
-		-- MinimalSliderWithSteppersTemplate (MinimalSlider.lua): Init sets the value without telling
-		-- its callbacks; the player moving it tells them the new value.
-		if template:find("MinimalSliderWithSteppersTemplate", 1, true) then
-			frame.MinText, frame.MaxText = frame:CreateFontString(), frame:CreateFontString()
-			frame.callbacks = {}
-			function frame:Init(value, minValue, maxValue, steps, formatters)
-				self.value, self.minValue, self.maxValue, self.steps, self.formatters = value, minValue, maxValue, steps, formatters
-			end
-			function frame:RegisterCallback(event, func, owner)
-				self.callbacks[event] = function(...)
-					func(owner, ...)
-				end
-			end
+		if templates.UIButtonTemplate then
+			Mixin(frame, UIButtonMixin)
+			frame:SetScript("OnClick", frame.OnClick)
+		end
+		if templates.MinimalSliderWithSteppersTemplate then
+			MakeMinimalSliderWithSteppers(frame)
 		end
 		return frame
 	end
-	MinimalSliderWithSteppersMixin = { Event = { OnValueChanged = "OnValueChanged" }, Label = { Left = 1, Right = 2 } }
-	function CreateMinimalSliderFormatter(_, formatter)
-		return formatter
-	end
-	function FormatPercentage(percentage)
-		return string.format("%d%%", Round(percentage * 100))
-	end
-	HUD_EDIT_MODE_SETTING_BAGS_SIZE = "Size"
-	HUD_EDIT_MODE_RESET_POSITION = "Reset To Default Position"
-	HUD_EDIT_MODE_REVERT_CHANGES = "Revert Changes"
-	HUD_EDIT_MODE_INSTRUCTIONS_CLICK_TO_EDIT = "Click To Edit"
+	MinimalSliderWithSteppersMixin = SliderMixin
+	CreateMinimalSliderFormatter = CreateMinimalSliderFormatterCopy
 	-- Applies a nine-slice layout with an art kit (NineSlice.lua); the stand-in keeps the kit.
 	NineSliceUtil = {}
 	function NineSliceUtil.ApplyLayout(container, layout, kit)
 		container.layout, container.kit = layout, kit
 	end
-
-	UIParent = NewRegion(nil)
-	UIParent.scale = UI_SCALE
-	UIParent.left, UIParent.bottom, UIParent.right, UIParent.top = 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT
 
 	-- The bottom row: the micro menu hangs off the screen, the main action bar off the micro
 	-- menu, the bags bar off its right side (Camelot's preset layout constants).
@@ -601,10 +962,10 @@ local function NewGame(options)
 		return not game.microMenuMoved
 	end
 	-- Edit Mode's box over each of its bars (EditModeSystemSelectionBaseTemplate).
-	MicroMenuContainer.Selection = NewRegion(MicroMenuContainer)
+	MicroMenuContainer.Selection = NewWidget("Frame", MicroMenuContainer)
 	MicroMenuContainer.Selection:SetFrameStrata("MEDIUM")
 	MicroMenuContainer.Selection:SetFrameLevel(1000)
-	MicroMenu = NewRegion(MicroMenuContainer)
+	MicroMenu = NewWidget("Frame", MicroMenuContainer)
 	MicroMenu.BorderArt = MicroMenu:CreateTexture()
 	MicroMenu.BorderArt:SetPoint("TOPLEFT", MicroMenu, "TOPLEFT", -MICRO_MENU_REACH, MICRO_MENU_REACH)
 	MicroMenu.BorderArt:SetPoint("BOTTOMRIGHT", MicroMenu, "BOTTOMRIGHT", MICRO_MENU_REACH, -MICRO_MENU_REACH)
@@ -626,23 +987,24 @@ local function NewGame(options)
 	BagsBar.BorderArt:SetPoint("TOPLEFT", BagsBar, "TOPLEFT", -BAR_REACH_LEFT, BAR_REACH_TOP)
 	BagsBar.BorderArt:SetPoint("BOTTOMRIGHT", BagsBar, "BOTTOMRIGHT", BAR_REACH_RIGHT, -BAR_REACH_BOTTOM)
 
-	CharacterReagentBag0Slot = NewRegion(BagsBar)
+	-- An ItemButton (ItemButtonTemplate.xml: a Button).
+	CharacterReagentBag0Slot = NewWidget("Button", BagsBar)
 	CharacterReagentBag0Slot.width = SLOT_SIZE
 	local slotFrame = CharacterReagentBag0Slot:CreateTexture()
 	slotFrame.atlas, slotFrame.width = "UI-HUD-ActionBar-IconFrame", SLOT_FRAME_SIZE
-	function CharacterReagentBag0Slot:GetNormalTexture()
-		return slotFrame
-	end
+	CharacterReagentBag0Slot.normalTexture = slotFrame
 
 	-- The bars Camelot stacks on the main action bar by their left edge
-	-- (UpdateBottomActionBarPositions with ACTION_BARS_RELATIVE_TO_BASE_POSITIONING).
+	-- (UpdateBottomActionBarPositions with ACTION_BARS_RELATIVE_TO_BASE_POSITIONING). The vehicle
+	-- exit button is a Button (VehicleLeaveButton.xml), the others frames.
 	SecondaryStatusTrackingBarContainer = NewXPBarContainer()
 	MainStatusTrackingBarContainer = NewXPBarContainer()
-	local stacked = { "MultiBarBottomRight", "MultiBarBottomLeft", "StanceBar", "PetActionBar", "PossessActionBar", "MainMenuBarVehicleLeaveButton" }
-	for _, name in ipairs(stacked) do
+	for _, name in ipairs({ "MultiBarBottomRight", "MultiBarBottomLeft", "StanceBar", "PetActionBar", "PossessActionBar" }) do
 		_G[name] = EditModeSystem(UIParent)
 		_G[name].scale = STACKED_BAR_SCALE
 	end
+	MainMenuBarVehicleLeaveButton = EditModeSystem(UIParent, "Button")
+	MainMenuBarVehicleLeaveButton.scale = STACKED_BAR_SCALE
 	-- UpdateBottomActionBarPositions places each of them again, cleared and set, and the action bar
 	-- too while it is in its default position (SetToLayoutAnchor).
 	function game.LayOutBottomBars()
@@ -660,7 +1022,7 @@ local function NewGame(options)
 	game.LayOutBottomBars()
 
 	-- The gamepad interface: the gamepad action bars' frame, hidden until the game switches.
-	GamepadMainActionBarFrame = NewRegion(UIParent)
+	GamepadMainActionBarFrame = NewWidget("Frame", UIParent)
 	GamepadMainActionBarFrame.shown = false
 	GamepadMainActionBarFrame.bottom = GAMEPAD_BUTTONS_BOTTOM
 	Enum = { InputDeviceInterfaceType = { Mkb = 0, Gamepad = 1 }, EditModeSystem = { MicroMenu = 13, Bags = 14 }, EditModeBagsSetting = { Size = 2 } }
@@ -675,13 +1037,16 @@ local function NewGame(options)
 	function C_InputInterfaceStyle.GetCurrentStyle()
 		return game.gamepad and Enum.InputDeviceInterfaceType.Gamepad or Enum.InputDeviceInterfaceType.Mkb
 	end
-	EditModeManagerFrame = {}
+	-- Edit Mode's manager (EditModeManager.xml: a frame, hidden until Edit Mode opens), cut to
+	-- what the addon calls and hooks.
+	EditModeManagerFrame = NewWidget("Frame", UIParent)
+	EditModeManagerFrame.shown = false
 	function EditModeManagerFrame:IsEditModeActive()
 		return game.editMode
 	end
 	-- The game's settings dialog for its bars (EditModeDialogs.xml), hidden. ASSUMED: a little off
 	-- Blizzard's values, so the tests see the block's dialog read them from it.
-	local gameDialog = NewRegion(UIParent)
+	local gameDialog = NewWidget("Frame", UIParent)
 	gameDialog.shown = false
 	gameDialog:SetFrameStrata("DIALOG")
 	gameDialog:SetFrameLevel(201)
@@ -689,11 +1054,11 @@ local function NewGame(options)
 	gameDialog.Title = gameDialog:CreateFontString()
 	gameDialog.Title:SetFontObject("GameFontHighlightLarge")
 	gameDialog.Title:SetPoint("TOP", gameDialog, "TOP", 0, -16)
-	gameDialog.Settings = NewRegion(gameDialog)
+	gameDialog.Settings = NewWidget("Frame", gameDialog)
 	gameDialog.Settings:SetPoint("TOP", gameDialog.Title, "BOTTOM", 0, -13)
-	gameDialog.Buttons = NewRegion(gameDialog)
+	gameDialog.Buttons = NewWidget("Frame", gameDialog)
 	gameDialog.Buttons.spacing = 3
-	gameDialog.Buttons.RevertChangesButton = NewRegion(gameDialog.Buttons)
+	gameDialog.Buttons.RevertChangesButton = NewWidget("Button", gameDialog.Buttons)
 	gameDialog.Buttons.RevertChangesButton:SetSize(181, 29)
 	gameDialog.Buttons.Divider = gameDialog.Buttons:CreateTexture()
 	gameDialog.Buttons.Divider:SetTexture("Interface\\FriendsFrame\\UI-FriendsFrame-OnlineDivider")
@@ -727,9 +1092,10 @@ local function NewGame(options)
 	-- The buttons that throw away unsaved changes: Revert All Changes (EditModeManager.xml), and
 	-- Exit or Switch in the dialog that asks about them (EditModeDialogs.xml). Their click runs the
 	-- game's revert; the stand-in clicks them with ClickGameButton.
-	EditModeManagerFrame.RevertAllChangesButton = NewRegion(UIParent)
-	EditModeUnsavedChangesDialog = NewRegion(UIParent)
-	EditModeUnsavedChangesDialog.ProceedButton = NewRegion(EditModeUnsavedChangesDialog)
+	EditModeManagerFrame.RevertAllChangesButton = NewWidget("Button", EditModeManagerFrame)
+	EditModeUnsavedChangesDialog = NewWidget("Frame", UIParent)
+	EditModeUnsavedChangesDialog.shown = false
+	EditModeUnsavedChangesDialog.ProceedButton = NewWidget("Button", EditModeUnsavedChangesDialog)
 	-- ASSUMED: the active layout follows the interface, as Blizzard keeps a layout per style.
 	function EditModeManagerFrame:GetActiveLayoutInfo()
 		return { interfaceStyle = C_InputInterfaceStyle.GetCurrentStyle() }
@@ -828,7 +1194,11 @@ local GROWTH = GROWTH_IN_BAGS_UNITS * BAGS_SCALE
 local failures = 0
 
 local function Test(name, func)
+	unplannedErrors = {}
 	local ok, problem = pcall(func)
+	if ok and #unplannedErrors > 0 then
+		ok, problem = false, "the addon reported an error the test didn't plan: " .. unplannedErrors[1]
+	end
 	if ok then
 		io.write("ok    " .. name .. "\n")
 	else
@@ -928,7 +1298,7 @@ Test("a four-digit latency shrinks to fit the slot, and grows back", function()
 	game.net.world = 120
 	Tick()
 	Equal(game.worldText.font[2], NUMBER_SIZE, "size back")
-	Equal(game.worldText.font[1], "Fonts\\SKURRI.TTF", "the game's number font")
+	Equal(game.worldText.font[1], NUMBER_FONT_FILE, "the game's number font")
 end)
 
 Test("each number has the same gap to the line as to the border, and touches neither", function()
@@ -1157,8 +1527,22 @@ local function ClickBlock()
 	game.editBox.scripts.OnMouseDown(game.editBox, "LeftButton")
 end
 
+-- The player clicks one of the dialog's buttons: its OnClick script, with the mouse button and
+-- whether it was pressed down.
+local function ClickButton(button)
+	button.scripts.OnClick(button, "LeftButton", false)
+end
+
+-- The player moves the size slider to a value.
 local function MoveSlider(value)
-	SettingsDialog().slider.callbacks.OnValueChanged(value)
+	SetSliderValue(SettingsDialog().slider.Slider, value, true)
+end
+
+-- The size slider's value, range and number of steps.
+local function SliderState(slider)
+	local minValue, maxValue = slider.Slider:GetMinMaxValues()
+	local steps = (maxValue - minValue) / slider.Slider:GetValueStep()
+	return slider.Slider:GetValue(), minValue, maxValue, steps
 end
 
 Test("in Edit Mode the block stays in its place in the row, in Edit Mode's box on top of the game's boxes", function()
@@ -1204,7 +1588,7 @@ Test("clicking the block in Edit Mode selects it and opens its settings where th
 	Equal(dialog.frame:GetHeight(), 16 + 13 + 32 + 13 + 29 + 3 + 17 + 3 + 29 + 44, "the content and the game's padding")
 	local point, relativeTo, relativePoint, x, y = dialog.frame:GetPoint(1)
 	Equal(table.concat({ point, relativePoint, x, y }, " ") .. " " .. tostring(relativeTo == UIParent), "BOTTOMRIGHT BOTTOMRIGHT -250 200 true", "where the game opens the bags bar's")
-	Equal(table.concat({ dialog.slider.value, dialog.slider.minValue, dialog.slider.maxValue, dialog.slider.steps }, " "), "100 75 200 25", "the bags bar's Size slider")
+	Equal(table.concat({ SliderState(dialog.slider) }, " "), "100 75 200 25", "the bags bar's Size slider")
 	Equal(dialog.slider.formatters[MinimalSliderWithSteppersMixin.Label.Right](150), "150%", "shown as a percentage")
 	Equal(dialog.revert:IsEnabled(), false, "nothing to revert")
 	Equal(dialog.reset:IsEnabled(), false, "already in its default place")
@@ -1251,10 +1635,10 @@ Test("Revert Changes puts back the spot and size the block had when Edit Mode op
 	DragTo(600, 500)
 	local dialog = SettingsDialog()
 	Equal(dialog.revert:IsEnabled(), true, "something to revert")
-	dialog.revert.onClick()
+	ClickButton(dialog.revert)
 	Equal(AmILaggingDB.size, 120, "size")
 	Equal(AmILaggingDB.spot.x .. " " .. AmILaggingDB.spot.y, "300 400", "spot")
-	Equal(dialog.slider.value, 120, "slider")
+	Equal((SliderState(dialog.slider)), 120, "slider")
 	Equal(dialog.revert:IsEnabled(), false, "nothing left to revert")
 	Near(game.block.scale, BAGS_SCALE * 1.2, "the block's scale")
 	-- After leaving and opening Edit Mode again there is nothing to revert, as in the game.
@@ -1271,7 +1655,7 @@ Test("Reset To Default Position puts the block back where the addon puts it and 
 	ClickBlock()
 	local dialog = SettingsDialog()
 	Equal(dialog.reset:IsEnabled(), true, "moved, so it can be reset")
-	dialog.reset.onClick()
+	ClickButton(dialog.reset)
 	Equal(AmILaggingDB.spot, nil, "spot")
 	Equal(AmILaggingDB.size, 150, "size kept")
 	Equal((BlockAnchor()), "BOTTOMLEFT", "back in the row")
@@ -1761,7 +2145,7 @@ Test("by a moved micro menu, dropping the block by it or Reset To Default Positi
 		Near(OffsetX(divider, "LEFT"), XP_BAR_WIDTH / XP_BAR_SEGMENTS * i, "tick mark " .. i .. " back")
 	end
 	ClickBlock()
-	SettingsDialog().reset.onClick()
+	ClickButton(SettingsDialog().reset)
 	Equal(AmILaggingDB.spot, nil, "spot after Reset To Default Position")
 	Equal((select(2, BlockAnchor())), MicroMenuContainer, "in its slot after Reset To Default Position")
 end)
@@ -1793,11 +2177,11 @@ Test("in the gamepad interface the block moves in Edit Mode too, with a spot of 
 	DragTo(300, 400)
 	ClickBlock()
 	Equal(SettingsDialog().reset:IsEnabled(), true, "the gamepad spot can be reset")
-	SettingsDialog().reset.onClick()
+	ClickButton(SettingsDialog().reset)
 	Equal(AmILaggingDB.gamepadSpot, nil, "gamepad spot after Reset To Default Position")
 	Equal(AmILaggingDB.spot.x, 500, "the mouse and keyboard spot untouched")
 	-- Revert puts back both spots as they were when Edit Mode opened.
-	SettingsDialog().revert.onClick()
+	ClickButton(SettingsDialog().revert)
 	Equal(AmILaggingDB.spot, nil, "mouse and keyboard spot after Revert Changes")
 	-- Only the gamepad spot changed: there is something to revert, and it goes back.
 	NewGame()
@@ -1807,7 +2191,7 @@ Test("in the gamepad interface the block moves in Edit Mode too, with a spot of 
 	DragTo(300, 400)
 	ClickBlock()
 	Equal(SettingsDialog().revert:IsEnabled(), true, "a gamepad change can be reverted")
-	SettingsDialog().revert.onClick()
+	ClickButton(SettingsDialog().revert)
 	Equal(AmILaggingDB.gamepadSpot, nil, "gamepad spot after Revert Changes")
 end)
 
