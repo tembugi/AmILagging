@@ -24,7 +24,7 @@ A bag-slot-sized block on the bottom bar, in a bar of its own, that always shows
 ## Chat and errors
 - Chat only when something stopped working: no login line, no slash command, no lag warning (the user's choice).
 - At login the addon checks the piece it can't do without, the micro menu it stands by. If it is missing, it says so in chat and does nothing else.
-- Making room runs inside the game's own code, right after Blizzard moves or resizes a frame, so every hook and callback runs through `Guarded` (`xpcall` with the game's `CallErrorHandler`): an error never breaks the code that called it. The first error is reported through the game's error handler and said once in chat; then the addon puts the bar back the way the game set it (block hidden, no moves, no stretch) and keeps it so until /reload; if even that fails, it leaves the bar alone.
+- Making room runs inside the game's own code, right after Blizzard moves or resizes a frame, so every hook and callback runs through `Guarded` (the shared error rule). After the first error the addon puts the bar back the way the game set it (block hidden, no moves, no stretch) and keeps it so until /reload; if even that fails, it leaves the bar alone.
 - If reading the numbers fails, the error is reported once, the numbers are cleared (old numbers would mislead), the updates stop and chat says so.
 
 ## Making room
